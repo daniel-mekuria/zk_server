@@ -1,357 +1,287 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const cors = require('cors');
+const morgan = require('morgan');
 const moment = require('moment');
-require('dotenv').config();
-const { pool, testConnection } = require('./database/connection');
-const { migrate } = require('./migrate');
-const { 
-    handleUserData, 
-    handleFingerprintData, 
-    handleFaceData, 
-    handleBioData,
-    syncDataToDevices 
-} = require('./handlers/dataHandlers');
-const { 
-    generateCommandId, 
-    getDeviceCommands, 
-    markCommandSent,
-    markCommandCompleted 
-} = require('./handlers/commandHandlers');
+const { v4: uuidv4 } = require('uuid');
+const Database = require('./database');
+const DeviceManager = require('./deviceManager');
+const CommandManager = require('./commandManager');
+const DataProcessor = require('./dataProcessor');
+const ManagementAPI = require('./managementAPI');
 
-const app = express();
-const PORT = process.env.PORT || 8081;
-
-// Middleware
-app.use(cors());
-app.use(bodyParser.text({ type: '*/*' })); // Handle raw text data
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
-
-// Custom middleware to parse ZKTeco data format
-app.use((req, res, next) => {
-    if (req.headers['content-type'] && req.headers['content-type'].includes('application/x-www-form-urlencoded')) {
-        // Already parsed by urlencoded middleware
-        next();
-    } else if (typeof req.body === 'string' && req.body.length > 0) {
-        // Parse tab-separated data format used by ZKTeco devices
-        req.zkData = req.body;
-        next();
-    } else {
-        next();
-    }
-});
-
-// 1. Initialization Information Exchange - Device Registration
-app.get('/iclock/cdata', async (req, res) => {
-    const { SN: serialNumber, options, pushver, language } = req.query;
-    
-    if (!serialNumber) {
-        return res.status(400).send('Serial number required');
+class ZKPushServer {
+    constructor(port = 8002) {
+        this.port = port;
+        this.app = express();
+        this.db = new Database();
+        this.deviceManager = new DeviceManager(this.db);
+        this.commandManager = new CommandManager(this.db);
+        this.dataProcessor = new DataProcessor(this.db, this.deviceManager);
+        this.managementAPI = new ManagementAPI(this.db, this.deviceManager, this.commandManager);
+        
+        this.setupMiddleware();
+        this.setupRoutes();
     }
 
-    try {
-        // Get client IP
-        const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
-        
-        // Register or update device
-        await pool.execute(`
-            INSERT INTO devices (serial_number, ip_address, push_version, language, status, last_seen)
-            VALUES (?, ?, ?, ?, 'online', NOW())
-            ON DUPLICATE KEY UPDATE
-            ip_address = VALUES(ip_address),
-            push_version = VALUES(push_version),
-            language = VALUES(language),
-            status = 'online',
-            last_seen = NOW()
-        `, [serialNumber, clientIp, pushver || '2.4.1', language || '69']);
+    setupMiddleware() {
+        // Custom body parser for different content types
+        this.app.use('/iclock/cdata', bodyParser.raw({ type: '*/*', limit: '50mb' }));
+        this.app.use('/iclock/devicecmd', bodyParser.raw({ type: '*/*', limit: '10mb' }));
+        this.app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+        this.app.use(bodyParser.json({ limit: '10mb' }));
+        this.app.use(morgan('combined'));
 
-        // Get sync timestamps (simplified - using current timestamp)
-        const currentTime = moment().format('YYYY-MM-DD HH:mm:ss');
+        // Set proper headers for ZK protocol
+        this.app.use((req, res, next) => {
+            res.header('Server', 'ZK-Push-Server/1.0');
+            res.header('Pragma', 'no-cache');
+            res.header('Cache-Control', 'no-store');
+            next();
+        });
+    }
+
+    setupRoutes() {
+        // Initialization Information Exchange
+        this.app.get('/iclock/cdata', this.handleInitialization.bind(this));
         
-        // Configuration response according to protocol
-        const config = [
+        // Data Upload and Configuration
+        this.app.post('/iclock/cdata', this.handleDataUpload.bind(this));
+        
+        // Command Requests
+        this.app.get('/iclock/getrequest', this.handleCommandRequest.bind(this));
+        
+        // Command Replies
+        this.app.post('/iclock/devicecmd', this.handleCommandReply.bind(this));
+        
+        // Heartbeat
+        this.app.get('/iclock/ping', this.handleHeartbeat.bind(this));
+        
+        // File operations (optional)
+        this.app.get('/iclock/file', this.handleFileRequest.bind(this));
+        
+        // Management API
+        this.app.use('/api', this.managementAPI.getRouter());
+    }
+
+    async handleInitialization(req, res) {
+        try {
+            const { SN: serialNumber, options, pushver, language, pushcommkey } = req.query;
+            
+            if (!serialNumber) {
+                return res.status(400).send('Missing serial number');
+            }
+
+            console.log(`Device initialization: ${serialNumber}`);
+            
+            // Register or update device
+            await this.deviceManager.registerDevice({
+                serialNumber,
+                pushVersion: pushver || '2.2.14',
+                language: language || '69', // English default
+                pushCommKey: pushcommkey,
+                lastSeen: new Date()
+            });
+
+            // Get device configuration
+            const config = await this.deviceManager.getDeviceConfig(serialNumber);
+            
+            // Build response according to protocol
+            const response = this.buildInitializationResponse(serialNumber, config);
+            
+            res.set('Date', new Date().toUTCString());
+            res.set('Content-Type', 'text/plain');
+            res.send(response);
+            
+        } catch (error) {
+            console.error('Initialization error:', error);
+            res.status(500).send('Internal server error');
+        }
+    }
+
+    buildInitializationResponse(serialNumber, config) {
+        const lines = [
             `GET OPTION FROM: ${serialNumber}`,
-            'ATTLOGStamp=None',
-            'OPERLOGStamp=None',
-            'ATTPHOTOStamp=None',
-            'BIODATAStamp=None',
-            'ErrorDelay=30',
-            'Delay=10',
-            'TransTimes=00:00;12:00',
-            'TransInterval=1',
-            'TransFlag=TransData AttLog OpLog AttPhoto EnrollUser ChgUser EnrollFP ChgFP UserPic FACE WORKCODE BioPhoto',
-            'TimeZone=0',
-            'Realtime=1',
-            'Encrypt=None',
-            'ServerVer=2.4.1',
-            'PushProtVer=2.4.1',
-            'PushOptionsFlag=1',
-            'PushOptions=FingerFunOn,FaceFunOn,BioDataFun,BioPhotoFun',
-            'MultiBioDataSupport=0:1:1:0:0:0:0:0:0:1',
-            'MultiBioPhotoSupport=0:1:1:0:0:0:0:0:0:1'
-        ].join('\n');
-
-        // Set required headers
-        res.set({
-            'Date': new Date().toUTCString(),
-            'Content-Type': 'text/plain',
-            'Pragma': 'no-cache',
-            'Cache-Control': 'no-store'
-        });
-
-        res.send(config);
-        console.log(`✓ Device ${serialNumber} registered/updated from ${clientIp}`);
+            `ATTLOGStamp=None`, // We don't handle attendance
+            `OPERLOGStamp=None`, // We don't handle operation logs
+            `ATTPHOTOStamp=None`, // We don't handle attendance photos
+            `BIODATAStamp=${config.biodataStamp || 'None'}`,
+            `ErrorDelay=${config.errorDelay || 30}`,
+            `Delay=${config.delay || 10}`,
+            `TransTimes=${config.transTimes || '00:00;12:00'}`,
+            `TransInterval=${config.transInterval || 1}`,
+            `TransFlag=TransData EnrollUser ChgUser EnrollFP ChgFP FACE UserPic BioPhoto WORKCODE`,
+            `TimeZone=${config.timeZone || 8}`,
+            `Realtime=${config.realtime || 1}`,
+            `Encrypt=None`, // No encryption as requested
+            `ServerVer=2.4.1`,
+            `PushProtVer=2.4.1`,
+            `PushOptionsFlag=1`,
+            `PushOptions=FingerFunOn,FaceFunOn,MultiBioDataSupport,MultiBioPhotoSupport`,
+            `MultiBioDataSupport=0:1:1:0:0:0:0:1:1:1`,
+            `MultiBioPhotoSupport=0:1:1:0:0:0:0:1:1:1`
+        ];
         
-    } catch (error) {
-        console.error('Error in device registration:', error);
-        res.status(500).send('Internal server error');
-    }
-});
-
-// 2. Data Upload Handler - Handles user info, fingerprints, faces, etc.
-app.post('/iclock/cdata', async (req, res) => {
-    const { SN: serialNumber, table, Stamp } = req.query;
-    
-    if (!serialNumber) {
-        return res.status(400).send('Serial number required');
+        return lines.join('\n');
     }
 
-    try {
-        // Update device last seen
-        await pool.execute(
-            'UPDATE devices SET last_seen = NOW(), status = "online" WHERE serial_number = ?',
-            [serialNumber]
-        );
-
-        const data = req.zkData || req.body;
-        
-        if (!data || data.trim() === '') {
-            return res.send('OK: 0');
-        }
-
-        let processedCount = 0;
-
-        // Handle different table types
-        switch (table) {
-            case 'OPERLOG':
-                processedCount = await handleOperationLog(data, serialNumber);
-                break;
-            case 'ATTLOG':
-                // Skip attendance logs - only sync user/biometric data
-                processedCount = 0;
-                break;
-            case 'BIODATA':
-                processedCount = await handleBioData(data, serialNumber);
-                break;
-            default:
-                // Parse the data to determine type
-                processedCount = await parseAndHandleData(data, serialNumber);
-                break;
-        }
-
-        res.send(`OK: ${processedCount}`);
-        console.log(`✓ Processed ${processedCount} records from device ${serialNumber}`);
-        
-    } catch (error) {
-        console.error('Error processing data upload:', error);
-        res.status(500).send('Error processing data');
-    }
-});
-
-// Parse uploaded data and handle different types
-async function parseAndHandleData(data, serialNumber) {
-    const lines = data.split('\n').filter(line => line.trim());
-    let processedCount = 0;
-
-    for (const line of lines) {
+    async handleDataUpload(req, res) {
         try {
-            if (line.startsWith('USER ')) {
-                await handleUserData(line, serialNumber);
-                processedCount++;
-            } else if (line.startsWith('FP ')) {
-                await handleFingerprintData(line, serialNumber);
-                processedCount++;
-            } else if (line.startsWith('FACE ')) {
-                await handleFaceData(line, serialNumber);
-                processedCount++;
-            } else if (line.startsWith('BIODATA ')) {
-                await handleBioData(line, serialNumber);
-                processedCount++;
+            const { SN: serialNumber, table, Stamp: stamp } = req.query;
+            const data = req.body.toString();
+            
+            if (!serialNumber) {
+                return res.status(400).send('Missing serial number');
             }
+
+            console.log(`Data upload from ${serialNumber}, table: ${table}`);
+            
+            let result;
+            
+            switch (table) {
+                case 'options':
+                    result = await this.dataProcessor.processOptions(serialNumber, data);
+                    break;
+                case 'OPERLOG':
+                    result = await this.dataProcessor.processOperationLog(serialNumber, data, stamp);
+                    break;
+                case 'BIODATA':
+                    result = await this.dataProcessor.processBioData(serialNumber, data, stamp);
+                    break;
+                case 'IDCARD':
+                    result = await this.dataProcessor.processIdCard(serialNumber, data, stamp);
+                    break;
+                default:
+                    result = { success: false, message: `Unsupported table: ${table}` };
+            }
+
+            if (result.success) {
+                res.send(`OK: ${result.count || 1}`);
+            } else {
+                res.status(400).send(result.message);
+            }
+            
         } catch (error) {
-            console.error(`Error processing line: ${line}`, error);
+            console.error('Data upload error:', error);
+            res.status(500).send('Internal server error');
         }
     }
 
-    return processedCount;
-}
-
-// Handle operation logs (user/template changes)
-async function handleOperationLog(data, serialNumber) {
-    const lines = data.split('\n').filter(line => line.trim());
-    let processedCount = 0;
-
-    for (const line of lines) {
+    async handleCommandRequest(req, res) {
         try {
-            if (line.startsWith('USER ')) {
-                await handleUserData(line, serialNumber);
-                processedCount++;
-            } else if (line.startsWith('FP ')) {
-                await handleFingerprintData(line, serialNumber);
-                processedCount++;
-            } else if (line.startsWith('FACE ')) {
-                await handleFaceData(line, serialNumber);
-                processedCount++;
-            } else if (line.startsWith('BIODATA ')) {
-                await handleBioData(line, serialNumber);
-                processedCount++;
+            const { SN: serialNumber, INFO: info } = req.query;
+            
+            if (!serialNumber) {
+                return res.status(400).send('Missing serial number');
             }
+
+            // Update device info if provided
+            if (info) {
+                await this.deviceManager.updateDeviceInfo(serialNumber, info);
+            }
+            
+            // Check for pending commands
+            const command = await this.commandManager.getNextCommand(serialNumber);
+            
+            res.set('Date', new Date().toUTCString());
+            res.set('Content-Type', 'text/plain');
+            
+            if (command) {
+                res.send(command);
+            } else {
+                res.send('OK');
+            }
+            
         } catch (error) {
-            console.error(`Error processing operation log line: ${line}`, error);
+            console.error('Command request error:', error);
+            res.status(500).send('Internal server error');
         }
     }
 
-    return processedCount;
-}
-
-// 3. Get Commands - Devices poll for commands
-app.get('/iclock/getrequest', async (req, res) => {
-    const { SN: serialNumber, INFO } = req.query;
-    
-    if (!serialNumber) {
-        return res.status(400).send('Serial number required');
-    }
-
-    try {
-        // Update device info if provided
-        if (INFO) {
-            const infoParams = INFO.split(',');
-            if (infoParams.length >= 5) {
-                await pool.execute(`
-                    UPDATE devices SET 
-                    firmware_version = ?,
-                    user_count = ?,
-                    fingerprint_count = ?,
-                    face_count = ?,
-                    last_seen = NOW(),
-                    status = 'online'
-                    WHERE serial_number = ?
-                `, [infoParams[0], infoParams[1], infoParams[2], infoParams[3], serialNumber]);
+    async handleCommandReply(req, res) {
+        try {
+            const { SN: serialNumber } = req.query;
+            const data = req.body.toString();
+            
+            if (!serialNumber) {
+                return res.status(400).send('Missing serial number');
             }
-        }
 
-        // Get pending commands for this device
-        const commands = await getDeviceCommands(serialNumber);
-        
-        res.set({
-            'Date': new Date().toUTCString(),
-            'Content-Type': 'text/plain',
-            'Pragma': 'no-cache',
-            'Cache-Control': 'no-store'
-        });
-
-        if (commands.length === 0) {
+            console.log(`Command reply from ${serialNumber}: ${data}`);
+            
+            await this.commandManager.processCommandReply(serialNumber, data);
+            
+            res.set('Date', new Date().toUTCString());
             res.send('OK');
-        } else {
-            // Send first pending command
-            const command = commands[0];
-            await markCommandSent(command.id);
-            res.send(`C:${command.command_id}:${command.command_data}`);
-            console.log(`✓ Sent command to device ${serialNumber}: ${command.command_type}`);
+            
+        } catch (error) {
+            console.error('Command reply error:', error);
+            res.status(500).send('Internal server error');
         }
-        
-    } catch (error) {
-        console.error('Error getting commands:', error);
-        res.status(500).send('Error getting commands');
-    }
-});
-
-// 4. Command Reply Handler
-app.post('/iclock/devicecmd', async (req, res) => {
-    const { SN: serialNumber } = req.query;
-    
-    if (!serialNumber) {
-        return res.status(400).send('Serial number required');
     }
 
-    try {
-        const replyData = req.zkData || req.body;
-        
-        // Parse command replies
-        const replies = replyData.split('\n').filter(line => line.trim());
-        
-        for (const reply of replies) {
-            const match = reply.match(/ID=([^&]+)&Return=([^&]+)&CMD=(.+)/);
-            if (match) {
-                const [, commandId, returnCode, cmdType] = match;
-                await markCommandCompleted(commandId, returnCode);
-                console.log(`✓ Command ${commandId} completed by ${serialNumber} with result: ${returnCode}`);
+    async handleHeartbeat(req, res) {
+        try {
+            const { SN: serialNumber } = req.query;
+            
+            if (!serialNumber) {
+                return res.status(400).send('Missing serial number');
             }
+
+            console.log(`🔄 PING - Device ${serialNumber} heartbeat received`);
+            
+            res.set('Date', new Date().toUTCString());
+            res.send('OK');
+            
+        } catch (error) {
+            console.error('Heartbeat error:', error);
+            res.status(500).send('Internal server error');
         }
-
-        res.set({
-            'Date': new Date().toUTCString(),
-            'Content-Type': 'text/plain'
-        });
-        res.send('OK');
-        
-    } catch (error) {
-        console.error('Error processing command reply:', error);
-        res.status(500).send('Error processing reply');
     }
-});
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
-// Start server
-async function startServer() {
-    try {
-        console.log('🏗️  Initializing ZKTeco Sync Server...\n');
-        
-        // Step 1: Run database migration
-        console.log('📋 Running database migration...');
-        await migrate({ quiet: true });
-        console.log('✅ Database migration completed\n');
-        
-        // Database connection already verified by migration
-        
-        // Step 2: Start the server
-        app.listen(PORT, () => {
-            console.log(`🚀 ZKTeco Sync Server running on port ${PORT}`);
-            console.log(`📡 Ready to sync user and biometric data across devices`);
-            console.log(`🌐 Server endpoints available at: http://localhost:${PORT}`);
-            console.log(`📊 Health check: http://localhost:${PORT}/health`);
-        });
-        
-        // Step 3: Setup periodic cleanup
-        setInterval(async () => {
-            try {
-                await pool.execute(`
-                    UPDATE devices 
-                    SET status = 'offline' 
-                    WHERE last_seen < DATE_SUB(NOW(), INTERVAL 5 MINUTE)
-                    AND status = 'online'
-                `);
-            } catch (error) {
-                console.error('Error updating device status:', error);
+    async handleFileRequest(req, res) {
+        try {
+            const { SN: serialNumber, url } = req.query;
+            
+            if (!serialNumber || !url) {
+                return res.status(400).send('Missing parameters');
             }
-        }, 60000); // Check every minute
-        
-    } catch (error) {
-        console.error('❌ Failed to start server:', error);
-        console.error('💡 Make sure MySQL is running and .env is configured correctly');
-        process.exit(1);
+
+            // Handle file requests (for firmware updates, etc.)
+            console.log(`File request from ${serialNumber}: ${url}`);
+            
+            // Return empty file for now
+            res.set('Content-Type', 'application/octet-stream');
+            res.send('');
+            
+        } catch (error) {
+            console.error('File request error:', error);
+            res.status(500).send('Internal server error');
+        }
+    }
+
+    async start() {
+        try {
+            await this.db.initialize();
+            
+            this.app.listen(this.port, () => {
+                console.log(`ZK Push Server listening on port ${this.port}`);
+                console.log('Protocol features enabled:');
+                console.log('- User management');
+                console.log('- Biometric data sync');
+                console.log('- Device configuration');
+                console.log('- Multi-device support');
+                console.log('Features disabled (as requested):');
+                console.log('- Attendance management');
+                console.log('- Data encryption');
+            });
+            
+        } catch (error) {
+            console.error('Failed to start server:', error);
+            process.exit(1);
+        }
     }
 }
 
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-    console.log('\n🛑 Shutting down server...');
-    process.exit(0);
-});
-
-startServer(); 
+// Create and start server
+const server = new ZKPushServer(process.env.PORT || 8002);
+server.start(); 

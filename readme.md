@@ -1,263 +1,226 @@
-# ZKTeco Sync Server
+# ZKTeco PUSH Protocol Server
 
-A Node.js + MySQL server that implements the ZKTeco PUSH Communication Protocol to synchronize user information and biometric data (fingerprints and face templates) across multiple ZKTeco attendance devices.
+A comprehensive Node.js implementation of the ZKTeco PUSH communication protocol for syncing user and biometric data across multiple ZKTeco devices.
 
 ## Features
 
-- **Real-time Synchronization**: Automatically sync user data and biometric templates across all connected devices
-- **ZKTeco PUSH Protocol**: Full implementation of the official ZKTeco PUSH Communication Protocol v2.4.1
-- **Multi-Device Support**: Manage unlimited number of ZKTeco devices
-- **Biometric Data Sync**: Support for fingerprint templates, face templates, and unified biometric data
-- **Command Queuing**: Reliable command delivery with retry mechanism
-- **Device Management**: Track device status, capabilities, and connection history
-- **MySQL Storage**: Robust data storage with proper indexing and relationships
+### Implemented Features
+- Device registration and management
+- User information synchronization
+- Biometric template management (fingerprint, face, finger vein, unified templates)
+- User photo and comparison photo handling
+- Work code management
+- ID card information processing
+- Real-time data synchronization across devices
+- Multi-device support with automatic sync
+- Command queuing and execution tracking
+- Heartbeat monitoring and connection management
 
-## Supported Data Types
+### Excluded Features (as requested)
+- Attendance record management
+- Communication encryption
+- Operation log processing for attendance
 
-- **User Information**: User ID, name, privilege level, passwords, card numbers, access groups
-- **Fingerprint Templates**: All 10 fingers with template data and algorithm versions  
-- **Face Templates**: Face recognition templates with algorithm version support
-- **Unified Biometric Data**: Modern biometric data format supporting multiple modalities
-- **Device Management**: Device registration, status tracking, and capability detection
+## Quick Start
 
-## Protocol Support
-
-This server implements the ZKTeco PUSH Communication Protocol as documented in the official specification:
-
-- Device registration and initialization
-- Data upload handling (users, fingerprints, faces, biometric data)
-- Command distribution and queuing
-- Command reply processing
-- Real-time and scheduled synchronization modes
-
-## Installation
-
-### Prerequisites
-
-- Node.js 14+ 
-- MySQL 5.7+ or MariaDB 10.3+
-- ZKTeco devices with PUSH protocol support
-
-### Quick Start
+### Installation
 
 ```bash
-git clone <repository-url>
-cd zk_server
+# Install dependencies
 npm install
-npm run init    # Creates .env + starts server
+
+# Start the server
+npm start
+
+# For development with auto-reload
+npm run dev
 ```
 
-### Detailed Setup
+### Configuration
 
-1. **Clone and Install**
-   ```bash
-   git clone <repository-url>
-   cd zk_server
-   npm install
-   ```
+The server runs on port 8080 by default. Set PORT environment variable to change:
 
-2. **Configure Environment**
-   ```bash
-   # Use setup script (recommended)
-   npm run setup
-   
-   # Or copy manually
-   cp config.example .env
-   
-   # Edit .env with your database credentials
-   nano .env
-   ```
-
-3. **Start Server**
-   ```bash
-   # Development mode
-   npm run dev
-   
-   # Production mode
-   npm start
-   ```
-   
-   The server automatically runs database migration on startup, creating all required tables.
-
-**Manual Migration (Optional)**: If you need to run migration separately:
 ```bash
-npm run migrate
+PORT=3000 npm start
 ```
 
-## Configuration
+### Device Setup
 
-Update the `.env` file with your settings:
+Configure your ZKTeco devices to connect to this server:
+- Server IP: Your server's IP address
+- Server Port: 8080 (or your configured port)
+- Protocol: PUSH
 
-```env
-# Database Configuration
-DB_HOST=localhost
-DB_USER=root
-DB_PASSWORD=your_mysql_password
-DB_NAME=zkteco_sync
+## Architecture
 
-# Server Configuration  
-PORT=8081
+### Core Components
 
-# Optional: Enable debug logging
-DEBUG=false
-```
+1. **Server (server.js)** - Main HTTP server handling ZK protocol endpoints
+2. **Database (database.js)** - SQLite database layer with full schema
+3. **Device Manager (deviceManager.js)** - Device registration and configuration
+4. **Command Manager (commandManager.js)** - Command queue and execution
+5. **Data Processor (dataProcessor.js)** - Data parsing and synchronization
 
-**Note:** The `.env` file is not tracked in git for security reasons. Always use the provided `config.example` as a template.
+### Database Schema
 
-## Device Configuration
-
-Configure your ZKTeco devices to connect to the server:
-
-1. **Network Settings**
-   - Set server IP to your server's IP address
-   - Set server port to 8081 (or your configured port)
-   - Enable PUSH protocol
-
-2. **PUSH Protocol Settings**
-   - Server URL: `http://your-server-ip:8081/iclock/`
-   - Enable real-time uploading
-   - Set upload interval as needed
-
-3. **Data Upload Settings**
-   - Enable user information upload
-   - Enable fingerprint template upload  
-   - Enable face template upload
-   - Enable operation log upload
+Main tables:
+- `devices` - Device registration and status
+- `users` - User information and credentials
+- `fingerprint_templates` - Fingerprint biometric data
+- `face_templates` - Face biometric data
+- `bio_templates` - Unified biometric templates
+- `user_photos` - User profile photos
+- `comparison_photos` - Biometric comparison photos
+- `commands` - Command queue and execution tracking
+- `sync_log` - Data synchronization logging
 
 ## API Endpoints
 
-The server implements the following ZKTeco PUSH protocol endpoints:
+### ZKTeco Protocol Endpoints
 
-### Device Registration
-- `GET /iclock/cdata?SN={serial}&options=all` - Device initialization and configuration
+- `GET /iclock/cdata` - Device initialization and configuration exchange
+- `POST /iclock/cdata` - Data upload from devices (users, templates, photos)
+- `GET /iclock/getrequest` - Command requests from devices
+- `POST /iclock/devicecmd` - Command replies from devices
+- `GET /iclock/ping` - Heartbeat monitoring
 
-### Data Upload  
-- `POST /iclock/cdata?SN={serial}&table={type}` - Upload user/biometric data
+### Management API Endpoints
 
-### Command Polling
-- `GET /iclock/getrequest?SN={serial}` - Get pending commands
+- `GET /api/devices` - List all devices with status
+- `GET /api/devices/{serialNumber}` - Get device details
+- `DELETE /api/devices/{serialNumber}` - Remove device
+- `GET /api/users` - List users (query: ?device=serialNumber)
+- `GET /api/users/{pin}` - Get user details with biometrics
+- `GET /api/commands` - List commands (query: ?device=&status=&limit=)
+- `POST /api/commands/user/add` - Add user command
+- `POST /api/commands/user/delete` - Delete user command
+- `POST /api/commands/device/reboot` - Reboot device command
+- `GET /api/status` - System status and statistics
+- `GET /api/stats` - Detailed system statistics
 
-### Command Reply
-- `POST /iclock/devicecmd?SN={serial}` - Command execution results
+### Supported Data Types
 
-### Health Check
-- `GET /health` - Server status
+1. **User Information (USERINFO)**
+2. **Fingerprint Templates (FINGERTMP)**
+3. **Face Templates (FACE)**
+4. **Finger Vein Templates (FVEIN)**
+5. **Unified Bio Templates (BIODATA)**
+6. **User Photos (USERPIC)**
+7. **Comparison Photos (BIOPHOTO)**
+8. **Work Codes (WORKCODE)**
+9. **ID Card Information (IDCARD)**
 
-## Database Schema
+## Synchronization
 
-The complete database schema is defined in `migrate.js` and includes:
+When any device uploads data, the server automatically:
 
-### Key Tables
+1. Processes and stores the data
+2. Identifies all other active devices
+3. Creates sync commands for each device
+4. Queues commands for delivery
+5. Tracks synchronization status
 
-- **devices**: Connected device information and status
-- **users**: User account information  
-- **fingerprint_templates**: Fingerprint biometric data
-- **face_templates**: Face recognition templates
-- **biometric_templates**: Unified biometric data (newer protocol)
-- **device_commands**: Command queue for device synchronization
+This ensures all devices maintain consistent user and biometric data.
 
-## How Synchronization Works
+## Command Management
 
-1. **Device Registration**: Devices connect and register with the server
-2. **Data Upload**: When a device uploads new/updated user or biometric data, it's stored in the database
-3. **Command Generation**: Server automatically generates sync commands for all other connected devices
-4. **Command Distribution**: Commands are queued and sent to devices when they poll for updates
-5. **Confirmation**: Devices acknowledge command completion
+Supports all ZKTeco command types:
 
-### Sync Flow Example
+### Data Commands
+- Add/update users, templates, photos
+- Delete user data and biometrics
+- Query specific information
+
+### Control Commands
+- Device reboot
+- Door unlock
+- Alarm control
+
+### Configuration Commands
+- Set device options
+- Reload configuration
+
+### Enrollment Commands
+- Remote fingerprint enrollment
+- Remote biometric enrollment
+
+## Protocol Compliance
+
+- Based on ZKTeco PUSH Protocol v2.4.1
+- Supports protocol versions 2.2.14 through 2.4.1
+- Full HTTP/1.1 compliance
+- Standard ZK message formatting
+
+## Development
+
+### Project Structure
 
 ```
-Device A adds new user → Server stores user → Commands queued for Devices B,C,D → 
-Devices poll for commands → Server sends user data → Devices confirm receipt → Sync complete
+zk_server/
+├── server.js           # Main application
+├── database.js         # Database layer
+├── deviceManager.js    # Device management
+├── commandManager.js   # Command handling
+├── dataProcessor.js    # Data processing
+├── package.json        # Dependencies
+└── README.md          # Documentation
 ```
 
-## Monitoring
+### Key Classes
 
-### Server Logs
-The server provides detailed logging for:
-- Device connections and status
-- Data synchronization events  
-- Command queue processing
-- Error conditions
+- `ZKPushServer` - Main server class
+- `Database` - SQLite database wrapper
+- `DeviceManager` - Device lifecycle management
+- `CommandManager` - Command queue operations
+- `DataProcessor` - Data parsing and sync logic
 
-### Database Monitoring
-Check sync status with SQL queries:
-```sql
--- View connected devices
-SELECT * FROM devices WHERE status = 'online';
+## Logging
 
--- Check command queue
-SELECT device_serial, command_type, status, created_at 
-FROM device_commands 
-WHERE status = 'pending';
+Comprehensive logging includes:
+- Device connections/disconnections
+- Data upload processing
+- Command execution results
+- Synchronization operations
+- Error tracking
 
--- View recent user syncs
-SELECT * FROM users ORDER BY updated_at DESC LIMIT 10;
+## Usage Examples
+
+### Management API Examples
+
+**Get all devices:**
+```bash
+curl http://localhost:8080/api/devices
 ```
 
-## Troubleshooting
+**Add a user to a device:**
+```bash
+curl -X POST http://localhost:8080/api/commands/user/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "deviceSerial": "DEVICE001",
+    "userInfo": {
+      "pin": "123",
+      "name": "John Doe",
+      "privilege": 0,
+      "card": "123456789"
+    }
+  }'
+```
 
-### Common Issues
+**Get system status:**
+```bash
+curl http://localhost:8080/api/status
+```
 
-1. **Device Not Connecting**
-   - Verify network connectivity
-   - Check server IP and port configuration
-   - Ensure firewall allows connections on configured port
+### Device Configuration
 
-2. **Data Not Syncing**
-   - Check device logs for upload errors
-   - Verify command queue is processing (`device_commands` table)
-   - Ensure devices are polling regularly for commands
-
-3. **Database Errors**
-   - Verify MySQL connection settings
-   - Check database user permissions
-   - Run `npm run migrate` to ensure database and tables are created
-
-### Debug Mode
-Enable debug logging by setting `DEBUG=true` in your `.env` file.
-
-## Security Considerations
-
-- Run server behind a firewall with only necessary ports open
-- Use strong MySQL credentials
-- Consider enabling HTTPS for production deployments
-- Regularly backup the database containing biometric data
-- Monitor device connections for unauthorized access
-
-## Performance
-
-- Server supports 100+ concurrent devices
-- MySQL provides efficient querying with proper indexing
-- Command queue prevents overwhelming devices with updates
-- Automatic cleanup of old commands and logs
+Configure your ZKTeco device with these settings:
+- Communication Mode: TCP/IP Push
+- Server IP: Your server IP
+- Server Port: 8080
+- Push Protocol: Enabled
+- Realtime: Enabled
 
 ## License
 
-[Add your license information here]
-
-## Support
-
-For issues related to:
-- ZKTeco device configuration: Consult ZKTeco documentation
-- Server setup and operation: Check logs and database status
-- Protocol implementation: Refer to ZKTeco PUSH Protocol specification
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly with actual ZKTeco devices
-5. Submit a pull request
-
----
-
-**Note**: This server only handles user and biometric data synchronization. It does not process attendance records or other device functions beyond data sync.
-
-### 🚀 Quick Start Summary
-```bash
-npm install && npm run init
-# Edit .env with database credentials, then restart
-```
-✅ Database migration runs automatically on startup - no manual setup required!
+MIT License 
