@@ -242,55 +242,108 @@ class ManagementAPI {
             
             console.log(`✅ User created successfully: PIN=${nextPin}, Name=${name}`);
 
-            // Now sync the new user across all active devices
+            // First sync time on all devices, then sync the new user
             const activeDevices = await this.deviceManager.getActiveDevices();
+            const timeSyncResults = [];
             const syncCommandResults = [];
             
-            for (const device of activeDevices) {
-                try {
-                    // Create add user command for this device
-                    const syncResult = await this.commandManager.addUser(device.serial_number, {
-                        pin: nextPin,
-                        name: name.trim(),
-                        privilege: 0,
-                        password: '',
-                        card: '',
-                        groupId: 1,
-                        timeZone: '0000000000000000',
-                        verifyMode: -1,
-                        viceCard: ''
-                    });
-                    syncCommandResults.push({
-                        device: device.serial_number,
-                        success: true,
-                        commandId: syncResult.commandId
-                    });
-                    console.log(`📤 Add user command queued for device ${device.serial_number}`);
-                } catch (error) {
-                    console.error(`❌ Failed to queue add user command for device ${device.serial_number}:`, error);
-                    syncCommandResults.push({
-                        device: device.serial_number,
-                        success: false,
-                        error: error.message
-                    });
-                }
-            }
-            
-            const successfulSyncs = syncCommandResults.filter(r => r.success).length;
-
-            res.json({
-                success: true,
-                message: `User created successfully with ID ${nextPin} and sync commands sent to ${successfulSyncs}/${activeDevices.length} devices`,
-                data: {
-                    userId: nextPin,
-                    user: createdUser,
-                    deviceSync: {
-                        totalDevices: activeDevices.length,
-                        successfulCommands: successfulSyncs,
-                        results: syncCommandResults
+            if (activeDevices.length > 0) {
+                console.log(`🕐 First synchronizing time on ${activeDevices.length} active devices before user sync`);
+                
+                // Step 1: Sync time on all devices first
+                for (const device of activeDevices) {
+                    try {
+                        const timeSync = await this.commandManager.syncDeviceTime(device.serial_number);
+                        timeSyncResults.push({
+                            device: device.serial_number,
+                            success: timeSync.success,
+                            syncCommands: timeSync.syncCommands,
+                            timezone: timeSync.timezone,
+                            datetime: timeSync.datetime
+                        });
+                        
+                        if (timeSync.success) {
+                            console.log(`🕐 Time sync commands queued for device ${device.serial_number}`);
+                        }
+                    } catch (error) {
+                        console.error(`❌ Error syncing time for device ${device.serial_number}:`, error);
+                        timeSyncResults.push({
+                            device: device.serial_number,
+                            success: false,
+                            error: error.message
+                        });
                     }
                 }
-            });
+                
+                console.log(`🔄 Now syncing new user ${nextPin} to ${activeDevices.length} active devices`);
+                
+                // Step 2: Sync the new user data
+                for (const device of activeDevices) {
+                    try {
+                        // Create add user command for this device
+                        const syncResult = await this.commandManager.addUser(device.serial_number, {
+                            pin: nextPin,
+                            name: name.trim(),
+                            privilege: 0,
+                            password: '',
+                            card: '',
+                            groupId: 1,
+                            timeZone: '0000000000000000',
+                            verifyMode: -1,
+                            viceCard: ''
+                        });
+                        syncCommandResults.push({
+                            device: device.serial_number,
+                            success: true,
+                            commandId: syncResult.commandId
+                        });
+                        console.log(`📤 Add user command queued for device ${device.serial_number}`);
+                    } catch (error) {
+                        console.error(`❌ Failed to queue add user command for device ${device.serial_number}:`, error);
+                        syncCommandResults.push({
+                            device: device.serial_number,
+                            success: false,
+                            error: error.message
+                        });
+                    }
+                }
+                
+                const successfulSyncs = syncCommandResults.filter(r => r.success).length;
+                const successfulTimeSyncs = timeSyncResults.filter(r => r.success).length;
+
+                res.json({
+                    success: true,
+                    message: `User created successfully with ID ${nextPin}, time synced on ${successfulTimeSyncs}/${activeDevices.length} devices, and user sync commands sent to ${successfulSyncs}/${activeDevices.length} devices`,
+                    data: {
+                        userId: nextPin,
+                        user: createdUser,
+                        timeSync: {
+                            totalDevices: activeDevices.length,
+                            successfulTimeSyncs: successfulTimeSyncs,
+                            results: timeSyncResults
+                        },
+                        deviceSync: {
+                            totalDevices: activeDevices.length,
+                            successfulCommands: successfulSyncs,
+                            results: syncCommandResults
+                        }
+                    }
+                });
+            } else {
+                res.json({
+                    success: true,
+                    message: `User created successfully with ID ${nextPin} (no active devices to sync)`,
+                    data: {
+                        userId: nextPin,
+                        user: createdUser,
+                        deviceSync: {
+                            totalDevices: 0,
+                            successfulCommands: 0,
+                            message: 'No active devices to sync to'
+                        }
+                    }
+                });
+            }
 
         } catch (error) {
             console.error('Error creating user:', error);
@@ -491,6 +544,36 @@ class ManagementAPI {
                 }
             }
 
+            // First sync time on all target devices, then sync data
+            const timeSyncResults = [];
+            
+            console.log(`🕐 First synchronizing time on ${targets.length} target devices before data sync`);
+            for (const target of targets) {
+                try {
+                    const timeSync = await this.commandManager.syncDeviceTime(target.serial_number);
+                    timeSyncResults.push({
+                        device: target.serial_number,
+                        success: timeSync.success,
+                        syncCommands: timeSync.syncCommands,
+                        timezone: timeSync.timezone,
+                        datetime: timeSync.datetime
+                    });
+                    
+                    if (timeSync.success) {
+                        console.log(`🕐 Time sync commands queued for device ${target.serial_number}`);
+                    }
+                } catch (error) {
+                    console.error(`❌ Error syncing time for device ${target.serial_number}:`, error);
+                    timeSyncResults.push({
+                        device: target.serial_number,
+                        success: false,
+                        error: error.message
+                    });
+                }
+            }
+            
+            console.log(`🔄 Now syncing data to ${targets.length} target devices`);
+            
             // Create sync commands for each target device
             for (const target of targets) {
                 const targetSerial = target.serial_number;
@@ -548,10 +631,10 @@ class ManagementAPI {
                             await this.commandManager.addBiodataTemplate(targetSerial, {
                                 pin: bio.pin,
                                 no: bio.bio_no,
-                                index: bio.bio_index,
+                                index: bio.index_num,
                                 valid: bio.valid,
                                 duress: bio.duress,
-                                type: bio.bio_type,
+                                type: bio.type,
                                 majorVer: bio.major_ver,
                                 minorVer: bio.minor_ver,
                                 format: bio.format,
@@ -578,26 +661,33 @@ class ManagementAPI {
             }
             
             const successfulSyncs = syncResults.filter(r => r.success).length;
+            const successfulTimeSyncs = timeSyncResults.filter(r => r.success).length;
             const totalCommands = syncResults.reduce((sum, r) => sum + (r.commandsCreated || 0), 0);
             
             res.json({
                 success: successfulSyncs > 0,
-                message: `Manual sync completed: ${successfulSyncs}/${targets.length} devices, ${totalCommands} commands queued`,
+                message: `Manual sync completed: time synced on ${successfulTimeSyncs}/${targets.length} devices, data synced to ${successfulSyncs}/${targets.length} devices, ${totalCommands} commands queued`,
                 data: {
                     syncSource: syncFromDatabase ? 'Database' : sourceDevice,
                     sourceDevice: syncFromDatabase ? null : sourceDevice,
                     syncFromDatabase,
                     syncType,
                     targetDevices: targets.length,
-                    successfulSyncs,
-                    totalCommands,
+                    timeSync: {
+                        successfulTimeSyncs: successfulTimeSyncs,
+                        results: timeSyncResults
+                    },
+                    dataSync: {
+                        successfulSyncs: successfulSyncs,
+                        totalCommands: totalCommands,
+                        results: syncResults
+                    },
                     syncData: {
                         users: syncData.users?.length || 0,
                         fingerprints: syncData.fingerprints?.length || 0,
                         faces: syncData.faces?.length || 0,
                         bioTemplates: syncData.bioTemplates?.length || 0
-                    },
-                    results: syncResults
+                    }
                 }
             });
             

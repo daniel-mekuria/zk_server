@@ -36,6 +36,8 @@ class ZKPushServer {
             res.header('Server', 'ZK-Push-Server/1.0');
             res.header('Pragma', 'no-cache');
             res.header('Cache-Control', 'no-store');
+            // CRITICAL: Set Date header for automatic time synchronization (required by ZKTeco protocol)
+            res.header('Date', new Date().toUTCString());
             next();
         });
     }
@@ -114,6 +116,9 @@ class ZKPushServer {
     }
 
     buildInitializationResponse(serialNumber, config) {
+        // Calculate server timezone offset in hours for time synchronization
+        const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60);
+        
         const lines = [
             `GET OPTION FROM: ${serialNumber}`,
             `ATTLOGStamp=None`, // We don't handle attendance
@@ -127,7 +132,7 @@ class ZKPushServer {
             `TransTimes=${config.transTimes || '00:00;12:00'}`,
             `TransInterval=${config.transInterval || 1}`,
             `TransFlag=TransData EnrollUser ChgUser EnrollFP ChgFP FACE UserPic BioPhoto WORKCODE FVEIN`,
-            `TimeZone=${config.timeZone || 8}`,
+            `TimeZone=${config.timeZone || serverTimezoneOffset}`, // Use server's actual timezone for sync
             `Realtime=${config.realtime || 1}`,
             `Encrypt=None`, // No encryption as requested
             `ServerVer=2.4.1`,
@@ -138,6 +143,8 @@ class ZKPushServer {
             `MultiBioPhotoSupport=${config.multiBioPhotoSupport || '0:1:1:0:0:0:0:1:1:1'}`,
             `ATTPHOTOBase64=1` // Enable base64 encoding for photos
         ];
+        
+        console.log(`🕐 Time synchronization configured: Server TimeZone=${config.timeZone || serverTimezoneOffset}, GMT Date header will be sent with all responses`);
         
         return lines.join('\n');
     }

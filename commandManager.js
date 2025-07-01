@@ -668,6 +668,58 @@ class CommandManager {
         return await this.addCommand(deviceSerial, 'CONFIG', commandData);
     }
 
+    // Time synchronization commands
+    async syncDeviceTime(deviceSerial) {
+        const results = [];
+        
+        try {
+            console.log(`🕐 Synchronizing time for device ${deviceSerial}`);
+            
+            // The ZKTeco protocol automatically syncs time via Date headers in HTTP responses
+            // and TimeZone setting in initialization. However, we can also send explicit commands
+            // to ensure proper synchronization.
+            
+            // 1. Send a time zone configuration
+            const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60);
+            const timezoneResult = await this.setOption(deviceSerial, 'TimeZone', serverTimezoneOffset);
+            results.push({ type: 'TimeZone', success: timezoneResult.success, result: timezoneResult });
+            
+            // 2. Send current date and time (some devices support DateTime option)
+            const now = new Date();
+            const dateTimeString = now.getFullYear() + '-' + 
+                                 String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                                 String(now.getDate()).padStart(2, '0') + ' ' +
+                                 String(now.getHours()).padStart(2, '0') + ':' +
+                                 String(now.getMinutes()).padStart(2, '0') + ':' +
+                                 String(now.getSeconds()).padStart(2, '0');
+            
+            const datetimeResult = await this.setOption(deviceSerial, 'DateTime', dateTimeString);
+            results.push({ type: 'DateTime', success: datetimeResult.success, result: datetimeResult });
+            
+            // 3. Reload options to apply changes
+            const reloadResult = await this.reloadOptions(deviceSerial);
+            results.push({ type: 'ReloadOptions', success: reloadResult.success, result: reloadResult });
+            
+            const successCount = results.filter(r => r.success).length;
+            
+            console.log(`🕐 Time synchronization for device ${deviceSerial}: ${successCount}/${results.length} commands queued successfully`);
+            console.log(`   📅 Server DateTime: ${dateTimeString} (GMT${serverTimezoneOffset >= 0 ? '+' : ''}${serverTimezoneOffset})`);
+            
+            return {
+                success: successCount > 0,
+                syncCommands: successCount,
+                totalCommands: results.length,
+                timezone: serverTimezoneOffset,
+                datetime: dateTimeString,
+                results
+            };
+            
+        } catch (error) {
+            console.error(`❌ Error synchronizing time for device ${deviceSerial}:`, error);
+            return { success: false, error: error.message, results };
+        }
+    }
+
     async reloadOptions(deviceSerial) {
         return await this.addCommand(deviceSerial, 'CONFIG', 'RELOAD OPTIONS');
     }
