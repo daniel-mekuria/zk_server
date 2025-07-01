@@ -53,11 +53,21 @@ class DataProcessor {
             } else if (parsed.type === 'FACE') {
                 return await this.processFaceTemplate(serialNumber, parsed.data);
             } else if (parsed.type === 'FVEIN') {
-                return await this.processFingerVeinTemplate(serialNumber, parsed.data);
+                return await this.processFingerVeinTemplate(serialNumber, record);
             } else if (parsed.type === 'USERPIC') {
                 return await this.processUserPhoto(serialNumber, parsed.data);
-            } else if (parsed.type === 'BIOPHOTO') {
-                return await this.processComparisonPhoto(serialNumber, parsed.data);
+            } else if (parsed.type === 'BIODATA') {
+                return await this.processBioTemplate(serialNumber, record);
+            } else if (parsed.type === 'IDCARD') {
+                return await this.processIdCardInfo(serialNumber, record);
+            } else if (parsed.type === 'WORKCODE') {
+                return await this.processWorkCodeInfo(serialNumber, record);
+            } else if (parsed.type === 'SMS') {
+                return await this.processShortMessageInfo(serialNumber, record);
+            } else if (parsed.type === 'USER_SMS') {
+                return await this.processUserSMSInfo(serialNumber, record);
+            } else if (parsed.type === 'ERRORLOG') {
+                return await this.processErrorLogInfo(serialNumber, record);
             }
 
             return { success: true };
@@ -65,6 +75,52 @@ class DataProcessor {
             console.error('Error processing operation record:', error);
             return { success: false, message: error.message };
         }
+    }
+
+    parseOperationRecord(record) {
+        // Parse different record types based on prefix
+        if (record.startsWith('USER ')) {
+            return { type: 'USER', data: this.parseKeyValueString(record.substring(5)) };
+        } else if (record.startsWith('FP ')) {
+            return { type: 'FP', data: this.parseKeyValueString(record.substring(3)) };
+        } else if (record.startsWith('FACE ')) {
+            return { type: 'FACE', data: this.parseKeyValueString(record.substring(5)) };
+        } else if (record.startsWith('FVEIN ')) {
+            return { type: 'FVEIN', data: this.parseKeyValueString(record.substring(6)) };
+        } else if (record.startsWith('USERPIC ')) {
+            return { type: 'USERPIC', data: this.parseKeyValueString(record.substring(8)) };
+        } else if (record.startsWith('WORKCODE ')) {
+            return { type: 'WORKCODE', data: this.parseKeyValueString(record.substring(9)) };
+        } else if (record.startsWith('SMS ')) {
+            return { type: 'SMS', data: this.parseKeyValueString(record.substring(4)) };
+        } else if (record.startsWith('USER_SMS ')) {
+            return { type: 'USER_SMS', data: this.parseKeyValueString(record.substring(9)) };
+        } else if (record.startsWith('ERRORLOG ')) {
+            return { type: 'ERRORLOG', data: this.parseKeyValueString(record.substring(9)) };
+        } else if (record.startsWith('BIODATA ')) {
+            return { type: 'BIODATA', data: this.parseBiodataRecord(record.substring(8)) };
+        } else if (record.startsWith('IDCARD ')) {
+            return { type: 'IDCARD', data: this.parseKeyValueString(record.substring(7)) };
+        }
+        
+        return { type: 'UNKNOWN', data: record };
+    }
+
+    parseBiodataRecord(record) {
+        // BIODATA uses spaces in upload format: Pin=X No=Y Index=Z Valid=W...
+        // Parse this carefully according to protocol specification, handling multiple spaces
+        const fields = {};
+        // Split by one or more whitespace characters and filter out empty strings
+        const parts = record.trim().split(/\s+/).filter(part => part.length > 0);
+        
+        for (const part of parts) {
+            const [key, value] = part.split('=');
+            if (key && value !== undefined) {
+                fields[key] = value;
+            }
+        }
+        
+        return fields;
     }
 
     async processBioData(serialNumber, data, stamp) {
@@ -115,6 +171,181 @@ class DataProcessor {
         }
     }
 
+    async processFingerVeinData(serialNumber, data, stamp) {
+        try {
+            console.log(`Processing finger vein data for device ${serialNumber}`);
+            
+            const records = this.parseDataRecords(data);
+            let processedCount = 0;
+
+            for (const record of records) {
+                const result = await this.processFingerVeinTemplate(serialNumber, record);
+                if (result.success) {
+                    processedCount++;
+                }
+            }
+
+            // Trigger sync to other devices
+            await this.syncDataToOtherDevices(serialNumber, 'FVEIN', records);
+
+            return { success: true, count: processedCount };
+        } catch (error) {
+            console.error('Error processing finger vein data:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processWorkCode(serialNumber, data, stamp) {
+        try {
+            console.log(`Processing work code data for device ${serialNumber}`);
+            
+            const records = this.parseDataRecords(data);
+            let processedCount = 0;
+
+            for (const record of records) {
+                const result = await this.processWorkCodeInfo(serialNumber, record);
+                if (result.success) {
+                    processedCount++;
+                }
+            }
+
+            // Trigger sync to other devices
+            await this.syncDataToOtherDevices(serialNumber, 'WORKCODE', records);
+
+            return { success: true, count: processedCount };
+        } catch (error) {
+            console.error('Error processing work code data:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processShortMessage(serialNumber, data, stamp) {
+        try {
+            console.log(`Processing short message data for device ${serialNumber}`);
+            
+            const records = this.parseDataRecords(data);
+            let processedCount = 0;
+
+            for (const record of records) {
+                const result = await this.processShortMessageInfo(serialNumber, record);
+                if (result.success) {
+                    processedCount++;
+                }
+            }
+
+            return { success: true, count: processedCount };
+        } catch (error) {
+            console.error('Error processing short message data:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processUserSMS(serialNumber, data, stamp) {
+        try {
+            console.log(`Processing user SMS data for device ${serialNumber}`);
+            
+            const records = this.parseDataRecords(data);
+            let processedCount = 0;
+
+            for (const record of records) {
+                const result = await this.processUserSMSInfo(serialNumber, record);
+                if (result.success) {
+                    processedCount++;
+                }
+            }
+
+            return { success: true, count: processedCount };
+        } catch (error) {
+            console.error('Error processing user SMS data:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processErrorLog(serialNumber, data, stamp) {
+        try {
+            console.log(`Processing error log data for device ${serialNumber}`);
+            
+            const records = this.parseDataRecords(data);
+            let processedCount = 0;
+
+            for (const record of records) {
+                const result = await this.processErrorLogInfo(serialNumber, record);
+                if (result.success) {
+                    processedCount++;
+                }
+            }
+
+            return { success: true, count: processedCount };
+        } catch (error) {
+            console.error('Error processing error log data:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processRemoteAttendance(serialNumber, queryParams) {
+        try {
+            const { PIN } = queryParams;
+            
+            if (!PIN) {
+                return { success: false, userFound: false };
+            }
+
+            // Query user information
+            const user = await this.db.get(
+                'SELECT * FROM users WHERE pin = ?',
+                [PIN]
+            );
+
+            if (!user) {
+                console.log(`Remote attendance: User ${PIN} not found`);
+                return { success: false, userFound: false };
+            }
+
+            // Query fingerprint templates
+            const fingerprints = await this.db.all(
+                'SELECT * FROM fingerprint_templates WHERE pin = ?',
+                [PIN]
+            );
+
+            // Query face templates  
+            const faces = await this.db.all(
+                'SELECT * FROM face_templates WHERE pin = ?',
+                [PIN]
+            );
+
+            // Query BIODATA templates
+            const biodata = await this.db.all(
+                'SELECT * FROM bio_templates WHERE pin = ?',
+                [PIN]
+            );
+
+            const userData = {
+                pin: user.pin,
+                name: user.name,
+                privilege: user.privilege,
+                password: user.password,
+                card: user.card,
+                groupId: user.group_id,
+                timeZone: user.time_zone,
+                verifyMode: user.verify_mode,
+                viceCard: user.vice_card
+            };
+
+            return {
+                success: true,
+                userFound: true,
+                userData,
+                fingerprints,
+                faces,
+                biodata
+            };
+
+        } catch (error) {
+            console.error('Error processing remote attendance:', error);
+            return { success: false, userFound: false, message: error.message };
+        }
+    }
+
     parseDataRecords(data) {
         if (!data || data.trim() === '') {
             return [];
@@ -122,29 +353,6 @@ class DataProcessor {
 
         // Split by line breaks and filter empty lines
         return data.split('\n').filter(line => line.trim() !== '');
-    }
-
-    parseOperationRecord(record) {
-        // Parse different record types based on prefix
-        if (record.startsWith('USER ')) {
-            return { type: 'USER', data: this.parseKeyValueString(record.substring(5)) };
-        } else if (record.startsWith('FP ')) {
-            return { type: 'FP', data: this.parseKeyValueString(record.substring(3)) };
-        } else if (record.startsWith('FACE ')) {
-            return { type: 'FACE', data: this.parseKeyValueString(record.substring(5)) };
-        } else if (record.startsWith('FVEIN ')) {
-            return { type: 'FVEIN', data: this.parseKeyValueString(record.substring(6)) };
-        } else if (record.startsWith('USERPIC ')) {
-            return { type: 'USERPIC', data: this.parseKeyValueString(record.substring(8)) };
-        } else if (record.startsWith('BIOPHOTO ')) {
-            return { type: 'BIOPHOTO', data: this.parseKeyValueString(record.substring(9)) };
-        } else if (record.startsWith('BIODATA ')) {
-            return { type: 'BIODATA', data: this.parseKeyValueString(record.substring(8)) };
-        } else if (record.startsWith('IDCARD ')) {
-            return { type: 'IDCARD', data: this.parseKeyValueString(record.substring(7)) };
-        }
-        
-        return { type: 'UNKNOWN', data: {} };
     }
 
     parseKeyValueString(str) {
@@ -277,7 +485,14 @@ class DataProcessor {
 
     async processBioTemplate(serialNumber, record) {
         try {
-            const templateData = this.parseKeyValueString(record.substring(8)); // Remove 'BIODATA '
+            console.log(`🔍 RAW BIODATA UPLOAD from ${serialNumber}:`);
+            console.log(`   📝 Raw record: ${record.substring(0, 200)}...`);
+            
+            // Extract BIODATA portion and parse using spaces (protocol specification)
+            const biodataContent = record.substring(8); // Remove 'BIODATA '
+            const templateData = this.parseBiodataRecord(biodataContent);
+            
+            console.log(`   📋 Parsed BIODATA fields:`, JSON.stringify(templateData, null, 2));
             
             const {
                 Pin: pin,
@@ -292,33 +507,75 @@ class DataProcessor {
                 Tmp: template
             } = templateData;
 
-            if (!pin || type === undefined) {
-                return { success: false, message: 'Missing PIN or Type' };
+            if (!pin || !type) {
+                throw new Error('Missing required PIN or Type in BIODATA');
             }
 
-            await this.db.run(`
-                INSERT OR REPLACE INTO bio_templates 
-                (pin, bio_no, index_num, valid, duress, type, major_ver, minor_ver, format, template_data, device_serial)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-                pin,
-                parseInt(no) || 0,
-                parseInt(index) || 0,
-                parseInt(valid) || 1,
-                parseInt(duress) || 0,
-                parseInt(type),
-                parseInt(majorVer) || 0,
-                parseInt(minorVer) || 0,
-                parseInt(format) || 0,
-                template || '',
-                serialNumber
-            ]);
+            // Store in database
+            await this.db.run(
+                `INSERT OR REPLACE INTO bio_templates 
+                (device_serial, pin, bio_no, index_num, valid, duress, type, major_ver, minor_ver, format, template_data) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [serialNumber, pin, no || 0, index || 0, valid || 1, duress || 0, type, majorVer || 0, minorVer || 0, format || 'ZK', template]
+            );
 
-            console.log(`Bio template processed: ${pin}:${type}:${no}:${index} for device ${serialNumber}`);
+            // Sync to other devices using correct BIODATA format
+            await this.syncBiodataToOtherDevices(serialNumber, templateData);
+
             return { success: true };
         } catch (error) {
-            console.error('Error processing bio template:', error);
+            console.error('Error processing BIODATA template:', error);
             return { success: false, message: error.message };
+        }
+    }
+
+    async syncBiodataToOtherDevices(sourceDevice, biodataFields) {
+        try {
+            // Get all other connected devices
+            const otherDevices = await this.db.all(
+                'SELECT DISTINCT device_serial FROM devices WHERE device_serial != ? AND last_seen > datetime("now", "-5 minutes")',
+                [sourceDevice]
+            );
+
+            if (otherDevices.length === 0) {
+                console.log('🔄 No other devices online for BIODATA sync');
+                return;
+            }
+
+            console.log(`🔄 Syncing BIODATA from ${sourceDevice} to ${otherDevices.length} devices`);
+
+            const CommandManager = require('./commandManager');
+            const commandManager = new CommandManager(this.db);
+
+            for (const device of otherDevices) {
+                try {
+                    // Generate BIODATA sync command following exact protocol specification
+                    // Format: DATA UPDATE BIODATA Pin=${XXX}${HT}No=${XXX}${HT}Index=${XXX}${HT}Valid=${XXX}${HT}Duress=${XXX}${HT}Type=${XXX}${HT}MajorVer=${XXX}${HT}MinorVer=${XXX}${HT}Format=${XXX}${HT}Tmp=${XXX}
+                    
+                    const result = await commandManager.addBiodataTemplate(device.device_serial, {
+                        pin: biodataFields.Pin,
+                        no: biodataFields.No || 0,
+                        index: biodataFields.Index || 0,
+                        valid: biodataFields.Valid || 1,
+                        duress: biodataFields.Duress || 0,
+                        type: biodataFields.Type,
+                        majorVer: biodataFields.MajorVer || 0,
+                        minorVer: biodataFields.MinorVer || 0,
+                        format: biodataFields.Format || 'ZK', // Preserve original format value
+                        template: biodataFields.Tmp
+                    });
+
+                    if (result.success) {
+                        console.log(`✅ BIODATA sync queued for device ${device.device_serial} - PIN ${biodataFields.Pin}, Type ${biodataFields.Type}`);
+                    } else {
+                        console.log(`❌ Failed to queue BIODATA sync for device ${device.device_serial}: ${result.error}`);
+                    }
+                } catch (error) {
+                    console.error(`Error syncing BIODATA to device ${device.device_serial}:`, error);
+                }
+            }
+        } catch (error) {
+            console.error('Error syncing BIODATA to other devices:', error);
         }
     }
 
@@ -453,6 +710,184 @@ class DataProcessor {
         }
     }
 
+    async processFingerVeinTemplate(serialNumber, record) {
+        try {
+            const templateData = this.parseKeyValueString(record.substring(6)); // Remove 'FVEIN '
+            
+            const {
+                Pin: pin,
+                FID: fid,
+                Index: index,
+                Size: size,
+                Valid: valid,
+                Tmp: template
+            } = templateData;
+
+            if (!pin || fid === undefined || index === undefined) {
+                return { success: false, message: 'Missing PIN, FID, or Index' };
+            }
+
+            await this.db.run(`
+                INSERT OR REPLACE INTO finger_vein_templates 
+                (pin, fid, index_num, size, valid, template_data, device_serial)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `, [
+                pin,
+                parseInt(fid),
+                parseInt(index),
+                parseInt(size) || 0,
+                parseInt(valid) || 1,
+                template || '',
+                serialNumber
+            ]);
+
+            console.log(`Finger vein template processed: ${pin}:${fid}:${index} for device ${serialNumber}`);
+            return { success: true };
+        } catch (error) {
+            console.error('Error processing finger vein template:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processWorkCodeInfo(serialNumber, record) {
+        try {
+            const workData = this.parseKeyValueString(record.substring(9)); // Remove 'WORKCODE '
+            
+            const {
+                PIN: pin,
+                CODE: code,
+                NAME: name
+            } = workData;
+
+            if (!pin || !code) {
+                return { success: false, message: 'Missing PIN or CODE' };
+            }
+
+            await this.db.run(`
+                INSERT OR REPLACE INTO work_codes 
+                (pin, code, name, device_serial)
+                VALUES (?, ?, ?, ?)
+            `, [
+                pin,
+                code,
+                name || '',
+                serialNumber
+            ]);
+
+            console.log(`Work code processed: ${pin}:${code} for device ${serialNumber}`);
+            return { success: true };
+        } catch (error) {
+            console.error('Error processing work code:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processShortMessageInfo(serialNumber, record) {
+        try {
+            const msgData = this.parseKeyValueString(record.substring(4)); // Remove 'SMS '
+            
+            const {
+                MSG: msg,
+                TAG: tag,
+                UID: uid,
+                MIN: minDuration,
+                StartTime: startTime
+            } = msgData;
+
+            if (!uid || !msg || !tag) {
+                return { success: false, message: 'Missing UID, MSG, or TAG' };
+            }
+
+            await this.db.run(`
+                INSERT OR REPLACE INTO short_messages 
+                (uid, msg, tag, min_duration, start_time, device_serial)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `, [
+                parseInt(uid),
+                msg,
+                parseInt(tag),
+                parseInt(minDuration) || 0,
+                startTime || null,
+                serialNumber
+            ]);
+
+            console.log(`Short message processed: ${uid} for device ${serialNumber}`);
+            return { success: true };
+        } catch (error) {
+            console.error('Error processing short message:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processUserSMSInfo(serialNumber, record) {
+        try {
+            const userData = this.parseKeyValueString(record.substring(9)); // Remove 'USER_SMS '
+            
+            const {
+                PIN: pin,
+                UID: uid
+            } = userData;
+
+            if (!pin || !uid) {
+                return { success: false, message: 'Missing PIN or UID' };
+            }
+
+            await this.db.run(`
+                INSERT OR REPLACE INTO user_sms 
+                (pin, uid, device_serial)
+                VALUES (?, ?, ?)
+            `, [
+                pin,
+                parseInt(uid),
+                serialNumber
+            ]);
+
+            console.log(`User SMS association processed: ${pin}:${uid} for device ${serialNumber}`);
+            return { success: true };
+        } catch (error) {
+            console.error('Error processing user SMS:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async processErrorLogInfo(serialNumber, record) {
+        try {
+            const errorData = this.parseKeyValueString(record.substring(9)); // Remove 'ERRORLOG '
+            
+            const {
+                ErrCode: errCode,
+                ErrMsg: errMsg,
+                DataOrigin: dataOrigin,
+                CmdId: cmdId,
+                Additional: additional
+            } = errorData;
+
+            if (!errCode) {
+                return { success: false, message: 'Missing ErrCode' };
+            }
+
+            // Store error log in a separate table if needed
+            await this.db.run(`
+                INSERT INTO sync_log 
+                (source_device, target_device, data_type, data_id, action, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `, [
+                serialNumber,
+                null,
+                'ERRORLOG',
+                errCode,
+                `${dataOrigin || 'unknown'}:${errMsg || 'no message'}`,
+                'logged'
+            ]);
+
+            console.log(`Error log processed: ${errCode} for device ${serialNumber}`);
+            return { success: true };
+        } catch (error) {
+            console.error('Error processing error log:', error);
+            return { success: false, message: error.message };
+        }
+    }
+
     async syncDataToOtherDevices(sourceDevice, dataType, records) {
         try {
             // Get all registered devices
@@ -486,11 +921,16 @@ class DataProcessor {
             const CommandManager = require('./commandManager');
             const commandManager = new CommandManager(this.db);
 
+            console.log(`🔄 Creating sync commands for ${targetDevice}: ${records.length} ${dataType} records`);
+            let successCount = 0;
+            let skippedCount = 0;
+
             for (const record of records) {
                 const parsed = this.parseOperationRecord(record);
+                let result = { success: true };
                 
                 if (parsed.type === 'USER') {
-                    await commandManager.addUser(targetDevice, {
+                    result = await commandManager.addUser(targetDevice, {
                         pin: parsed.data.PIN,
                         name: parsed.data.Name,
                         privilege: parsed.data.Pri,
@@ -502,15 +942,15 @@ class DataProcessor {
                         viceCard: parsed.data.ViceCard
                     });
                 } else if (parsed.type === 'FP') {
-                    await commandManager.addFingerprintTemplate(targetDevice, {
-                        pin: parsed.data.PIN,
-                        fid: parsed.data.FID,
-                        size: parsed.data.Size,
-                        valid: parsed.data.Valid,
-                        template: parsed.data.TMP
+                    result = await commandManager.addFingerprintTemplate(targetDevice, {
+                        PIN: parsed.data.PIN,
+                        FID: parsed.data.FID,
+                        Size: parsed.data.Size,
+                        Valid: parsed.data.Valid,
+                        TMP: parsed.data.TMP
                     });
                 } else if (parsed.type === 'FACE') {
-                    await commandManager.addFaceTemplate(targetDevice, {
+                    result = await commandManager.addFaceTemplate(targetDevice, {
                         pin: parsed.data.PIN,
                         fid: parsed.data.FID,
                         size: parsed.data.SIZE,
@@ -518,35 +958,100 @@ class DataProcessor {
                         template: parsed.data.TMP
                     });
                 } else if (parsed.type === 'BIODATA') {
-                    await commandManager.addBioTemplate(targetDevice, {
+                    // Always use BIODATA format since that's how devices upload the data
+                    console.log(`🔍 BIODATA SYNC DEBUG for PIN ${parsed.data.Pin}:`);
+                    console.log(`   📄 Raw parsed data:`, JSON.stringify(parsed.data, null, 2));
+                    console.log(`   🔗 Fields: Pin=${parsed.data.Pin}, No=${parsed.data.No}, Index=${parsed.data.Index}, Valid=${parsed.data.Valid}`);
+                    console.log(`   📋 Bio fields: Type=${parsed.data.Type}, MajorVer=${parsed.data.MajorVer}, MinorVer=${parsed.data.MinorVer}, Format=${parsed.data.Format}`);
+                    console.log(`   📝 Template length: ${parsed.data.Tmp ? parsed.data.Tmp.length : 'undefined'}`);
+                    
+                    // Validate template data before syncing
+                    if (parsed.data.Tmp && parsed.data.Tmp.length > 0) {
+                        result = await commandManager.addBiodataTemplate(targetDevice, {
+                            pin: parsed.data.Pin,
+                            no: parsed.data.No || 0,
+                            index: parsed.data.Index || 0,
+                            valid: parsed.data.Valid || 1,
+                            duress: parsed.data.Duress || 0,
+                            type: parsed.data.Type,
+                            majorVer: parsed.data.MajorVer || 0,
+                            minorVer: parsed.data.MinorVer || 0,
+                            format: parsed.data.Format || 0,
+                            template: parsed.data.Tmp
+                        });
+                        console.log(`   ✅ BIODATA sync result:`, result);
+                    } else {
+                        console.log(`⚠️ Skipping BIODATA sync for PIN ${parsed.data.Pin}, Type ${parsed.data.Type} - empty template`);
+                        result = { success: false, error: 'Empty template data' };
+                    }
+                } else if (parsed.type === 'FVEIN') {
+                    result = await commandManager.addFingerVeinTemplate(targetDevice, {
                         pin: parsed.data.Pin,
-                        no: parsed.data.No,
+                        fid: parsed.data.FID,
                         index: parsed.data.Index,
+                        size: parsed.data.Size,
                         valid: parsed.data.Valid,
-                        duress: parsed.data.Duress,
-                        type: parsed.data.Type,
-                        majorVer: parsed.data.MajorVer,
-                        minorVer: parsed.data.MinorVer,
-                        format: parsed.data.Format,
                         template: parsed.data.Tmp
                     });
+                } else if (parsed.type === 'USERPIC') {
+                    result = await commandManager.addUserPhoto(targetDevice, {
+                        pin: parsed.data.PIN,
+                        size: parsed.data.Size,
+                        content: parsed.data.Content
+                    });
+                } else if (parsed.type === 'BIOPHOTO') {
+                    result = await commandManager.addComparisonPhoto(targetDevice, {
+                        pin: parsed.data.PIN,
+                        type: parsed.data.Type,
+                        size: parsed.data.Size,
+                        content: parsed.data.Content
+                    });
+                } else if (parsed.type === 'WORKCODE') {
+                    result = await commandManager.addWorkCode(targetDevice, {
+                        pin: parsed.data.PIN,
+                        code: parsed.data.CODE,
+                        name: parsed.data.NAME
+                    });
+                } else if (parsed.type === 'SMS') {
+                    result = await commandManager.addShortMessage(targetDevice, {
+                        uid: parsed.data.UID,
+                        msg: parsed.data.MSG,
+                        tag: parsed.data.TAG,
+                        minDuration: parsed.data.MIN,
+                        startTime: parsed.data.StartTime
+                    });
+                } else if (parsed.type === 'USER_SMS') {
+                    result = await commandManager.addUserSMSAssociation(targetDevice, {
+                        pin: parsed.data.PIN,
+                        uid: parsed.data.UID
+                    });
+                }
+                // Note: ERRORLOG entries are not synced to other devices
+
+                // Track sync results
+                if (result && result.success !== false) {
+                    successCount++;
+                } else {
+                    skippedCount++;
+                    console.log(`⚠️ Skipped syncing ${parsed.type} record: ${result?.error || 'Unknown error'}`);
                 }
 
                 // Log the sync operation
                 await this.db.run(`
                     INSERT INTO sync_log 
-                    (source_device, target_device, data_type, data_id, action)
-                    VALUES (?, ?, ?, ?, ?)
+                    (source_device, target_device, data_type, data_id, action, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 `, [
                     sourceDevice,
                     targetDevice,
                     parsed.type,
                     parsed.data.PIN || parsed.data.Pin || parsed.data.IDNum || 'unknown',
-                    'sync'
+                    'sync',
+                    result && result.success !== false ? 'queued' : 'skipped'
                 ]);
             }
 
-            console.log(`Sync commands created for device ${targetDevice}`);
+            console.log(`✅ Sync commands created for device ${targetDevice}: ${successCount} queued, ${skippedCount} skipped`);
         } catch (error) {
             console.error('Error creating sync commands:', error);
         }

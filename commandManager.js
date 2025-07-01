@@ -112,19 +112,90 @@ class CommandManager {
                 break;
             case 'ENROLL_FP':
             case 'ENROLL_BIO':
+            case 'ENROLL_MF':
                 await this.handleEnrollCommandResult(deviceSerial, reply);
                 break;
+            case 'REBOOT':
+            case 'AC_UNLOCK':
+            case 'AC_UNALARM':
+                console.log(`🔧 Control command ${reply.CMD} result for device ${deviceSerial}: ${reply.Return === '0' ? 'Success' : 'Failed'}`);
+                break;
+            case 'CHECK':
+            case 'LOG':
+            case 'VERIFY':
+                console.log(`📊 Check command ${reply.CMD} result for device ${deviceSerial}: ${reply.Return === '0' ? 'Success' : 'Failed'}`);
+                break;
+            case 'INFO':
+                console.log(`ℹ️ Info command result for device ${deviceSerial}: ${reply.Return === '0' ? 'Success' : 'Failed'}`);
+                break;
             default:
-                console.log(`Unhandled command result: ${reply.CMD}`);
+                console.log(`❓ Unhandled command result: ${reply.CMD} for device ${deviceSerial}`);
         }
     }
 
     async handleDataCommandResult(deviceSerial, reply) {
         // Handle DATA command results
         if (reply.Return === '0') {
-            console.log(`Data command successful for device ${deviceSerial}`);
+            console.log(`✅ Data command successful for device ${deviceSerial}`);
         } else {
-            console.log(`Data command failed for device ${deviceSerial}, return code: ${reply.Return}`);
+            const errorCode = reply.Return;
+            let errorDescription = 'Unknown error';
+            
+            // Map common error codes from the protocol specification
+            switch (errorCode) {
+                case '-1':
+                    errorDescription = 'Parameter is incorrect';
+                    break;
+                case '-2':
+                    errorDescription = 'Transmitted user photo data does not match the given size';
+                    break;
+                case '-3':
+                    errorDescription = 'Reading or writing is incorrect';
+                    break;
+                case '-9':
+                    errorDescription = 'Transmitted template data does not match the given size';
+                    break;
+                case '-10':
+                    errorDescription = 'User specified by PIN does not exist in the equipment';
+                    break;
+                case '-11':
+                    errorDescription = 'Fingerprint template format is illegal';
+                    break;
+                case '-12':
+                    errorDescription = 'Fingerprint template is illegal';
+                    break;
+                case '-1001':
+                    errorDescription = 'Limited capacity';
+                    break;
+                case '-1002':
+                    errorDescription = 'Not supported by the equipment';
+                    break;
+                case '-1003':
+                    errorDescription = 'Command execution timeout';
+                    break;
+                case '-1004':
+                    errorDescription = 'Data and equipment configuration are inconsistent';
+                    break;
+                case '-1005':
+                    errorDescription = 'Equipment is busy';
+                    break;
+                case '-1006':
+                    errorDescription = 'Data is too long';
+                    break;
+                case '-1007':
+                    errorDescription = 'Memory error';
+                    break;
+                case '-1008':
+                    errorDescription = 'Failed to get server data';
+                    break;
+            }
+            
+            console.log(`❌ Data command failed for device ${deviceSerial}, error code: ${errorCode} (${errorDescription})`);
+            
+            // Special handling for template-related errors
+            if (errorCode === '-11' || errorCode === '-12') {
+                console.log(`🔧 Template format issue detected. This may be due to algorithm version mismatch or corrupted template data.`);
+            }
         }
     }
 
@@ -150,7 +221,8 @@ class CommandManager {
     async addUser(deviceSerial, userInfo) {
         const { pin, name, privilege = 0, password = '', card = '', groupId = 1, timeZone = '0000000000000000', verifyMode = -1, viceCard = '' } = userInfo;
         
-        const commandData = `DATA UPDATE USERINFO PIN=${pin}\tName=${name}\tPri=${privilege}\tPasswd=${password}\tCard=${card}\tGrp=${groupId}\tTZ=${timeZone}\tVerify=${verifyMode}\tViceCard=${viceCard}`;
+        const TAB = '\t';
+        const commandData = `DATA UPDATE USERINFO PIN=${pin}${TAB}Name=${name}${TAB}Pri=${privilege}${TAB}Passwd=${password}${TAB}Card=${card}${TAB}Grp=${groupId}${TAB}TZ=${timeZone}${TAB}Verify=${verifyMode}${TAB}ViceCard=${viceCard}`;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
@@ -166,9 +238,30 @@ class CommandManager {
     }
 
     // Fingerprint template commands
-    async addFingerprintTemplate(deviceSerial, templateInfo) {
-        const { pin, fid, size, valid = 1, template } = templateInfo;
-        const commandData = `DATA UPDATE FINGERTMP PIN=${pin}\tFID=${fid}\tSize=${size}\tValid=${valid}\tTMP=${template}`;
+    async addFingerprintTemplate(deviceSerial, fpData) {
+        const { PIN: pin, FID: fid, Size: size, Valid: valid, TMP: template } = fpData;
+        
+        // Validate template data to prevent -12 errors
+        if (!template || template.length === 0) {
+            console.log(`⚠️ Skipping fingerprint template for PIN ${pin}, FID ${fid} - empty template data`);
+            return { success: false, error: 'Empty template data' };
+        }
+
+        // Basic base64 validation
+        try {
+            // Check if template looks like valid base64
+            const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+            if (!base64Regex.test(template)) {
+                console.log(`⚠️ Skipping fingerprint template for PIN ${pin}, FID ${fid} - invalid base64 format`);
+                return { success: false, error: 'Invalid base64 format' };
+            }
+        } catch (error) {
+            console.log(`⚠️ Skipping fingerprint template for PIN ${pin}, FID ${fid} - validation error:`, error.message);
+            return { success: false, error: 'Validation failed' };
+        }
+
+        const TAB = '\t';
+        const commandData = `DATA UPDATE FINGERTMP PIN=${fpData.PIN}${TAB}FID=${fpData.FID}${TAB}Size=${fpData.Size || 0}${TAB}Valid=${fpData.Valid || 1}${TAB}TMP=${fpData.TMP || ''}`;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
@@ -198,7 +291,8 @@ class CommandManager {
     // Face template commands
     async addFaceTemplate(deviceSerial, templateInfo) {
         const { pin, fid, size, valid = 1, template } = templateInfo;
-        const commandData = `DATA UPDATE FACE PIN=${pin}\tFID=${fid}\tValid=${valid}\tSize=${size}\tTMP=${template}`;
+        const TAB = '\t';
+        const commandData = `DATA UPDATE FACE PIN=${pin}${TAB}FID=${fid}${TAB}Valid=${valid}${TAB}Size=${size}${TAB}TMP=${template}`;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
@@ -208,8 +302,8 @@ class CommandManager {
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
-    // Unified bio template commands
-    async addBioTemplate(deviceSerial, templateInfo) {
+    // Unified bio template commands (BIODATA format)
+    async addBiodataTemplate(deviceSerial, templateInfo) {
         const { 
             pin, 
             no = 0, 
@@ -217,13 +311,48 @@ class CommandManager {
             valid = 1, 
             duress = 0, 
             type, 
-            majorVer, 
-            minorVer, 
-            format = 0, 
+            majorVer = 0, 
+            minorVer = 0, 
+            format = 'ZK', 
             template 
         } = templateInfo;
         
-        const commandData = `DATA UPDATE BIODATA Pin=${pin}\tNo=${no}\tIndex=${index}\tValid=${valid}\tDuress=${duress}\tType=${type}\tMajorVer=${majorVer}\tMinorVer=${minorVer}\tFormat=${format}\tTmp=${template}`;
+        console.log(`🔧 BIODATA COMMAND DEBUG for device ${deviceSerial}:`);
+        console.log(`   📋 Input params: pin=${pin}, no=${no}, index=${index}, valid=${valid}, duress=${duress}`);
+        console.log(`   📊 Bio params: type=${type}, majorVer=${majorVer}, minorVer=${minorVer}, format=${format}`);
+        console.log(`   📝 Template: ${template ? `${template.length} chars, starts with: ${template.substring(0, 20)}...` : 'undefined'}`);
+        
+        // Validate required fields
+        if (!pin || !type || !template) {
+            console.log(`⚠️ Validation failed: pin=${pin}, type=${type}, template=${template ? 'present' : 'missing'}`);
+            return { success: false, error: 'Missing required fields: pin, type, or template' };
+        }
+
+        // Validate template data
+        if (!template || template.length === 0) {
+            console.log(`⚠️ Skipping BIODATA template for PIN ${pin}, Type ${type} - empty template data`);
+            return { success: false, error: 'Empty template data' };
+        }
+
+        // Basic base64 validation for BIODATA templates
+        try {
+            const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+            if (!base64Regex.test(template)) {
+                console.log(`⚠️ Skipping BIODATA template for PIN ${pin}, Type ${type} - invalid base64 format`);
+                return { success: false, error: 'Invalid base64 template format' };
+            }
+        } catch (error) {
+            console.log(`⚠️ Template validation error for PIN ${pin}, Type ${type}:`, error.message);
+            return { success: false, error: 'Template validation failed' };
+        }
+
+        // Build command according to exact protocol specification:
+        // C:${CmdID}:DATA UPDATE BIODATA Pin=${XXX}${HT}No=${XXX}${HT}Index=${XXX}${HT}Valid=${XXX}${HT}Duress=${XXX}${HT}Type=${XXX}${HT}MajorVer=${XXX}${HT}MinorVer=${XXX}${HT}Format=${XXX}${HT}Tmp=${XXX}
+        const TAB = '\t';
+        const commandData = `DATA UPDATE BIODATA Pin=${pin}${TAB}No=${no}${TAB}Index=${index}${TAB}Valid=${valid}${TAB}Duress=${duress}${TAB}Type=${type}${TAB}MajorVer=${majorVer}${TAB}MinorVer=${minorVer}${TAB}Format=${format}${TAB}Tmp=${template}`;
+        
+        console.log(`🚀 Generated BIODATA command (first 200 chars): ${commandData.substring(0, 200)}...`);
+        console.log(`🔍 Tab character verification: ${commandData.includes('\t') ? 'TABS PRESENT' : 'NO TABS FOUND'}`);
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
@@ -372,6 +501,136 @@ class CommandManager {
             console.error('Error getting pending commands count:', error);
             return 0;
         }
+    }
+
+    // Finger vein template commands
+    async addFingerVeinTemplate(deviceSerial, templateInfo) {
+        const { pin, fid, index, size, valid = 1, template } = templateInfo;
+        const commandData = `DATA UPDATE FVEIN Pin=${pin}\tFID=${fid}\tIndex=${index}\tSize=${size}\tValid=${valid}\tTmp=${template}`;
+        
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    async deleteFingerVeinTemplate(deviceSerial, pin, fid = null) {
+        let commandData;
+        if (fid !== null) {
+            commandData = `DATA DELETE FVEIN Pin=${pin}\tFID=${fid}`;
+        } else {
+            commandData = `DATA DELETE FVEIN Pin=${pin}`;
+        }
+        
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    // Short message commands
+    async addShortMessage(deviceSerial, messageInfo) {
+        const { uid, msg, tag, minDuration = 0, startTime = '' } = messageInfo;
+        const commandData = `DATA UPDATE SMS MSG=${msg}\tTAG=${tag}\tUID=${uid}\tMIN=${minDuration}\tStartTime=${startTime}`;
+        
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    async deleteShortMessage(deviceSerial, uid) {
+        const commandData = `DATA DELETE SMS UID=${uid}`;
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    // User SMS association commands
+    async addUserSMSAssociation(deviceSerial, associationInfo) {
+        const { pin, uid } = associationInfo;
+        const commandData = `DATA UPDATE USER_SMS PIN=${pin}\tUID=${uid}`;
+        
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    // ID Card commands
+    async addIdCard(deviceSerial, cardInfo) {
+        const { 
+            pin = '', snNum = '', idNum, dnNum = '', name = '', gender = 0, 
+            nation = 0, birthday = '', validInfo = '', address = '', 
+            additionalInfo = '', issuer = '', photo = '', fpTemplate1 = '', 
+            fpTemplate2 = '', reserve = '', notice = '' 
+        } = cardInfo;
+        
+        const commandData = `DATA UPDATE IDCARD PIN=${pin}\tSNNum=${snNum}\tIDNum=${idNum}\tDNNum=${dnNum}\tName=${name}\tGender=${gender}\tNation=${nation}\tBirthday=${birthday}\tValidInfo=${validInfo}\tAddress=${address}\tAdditionalInfo=${additionalInfo}\tIssuer=${issuer}\tPhoto=${photo}\tFPTemplate1=${fpTemplate1}\tFPTemplate2=${fpTemplate2}\tReserve=${reserve}\tNotice=${notice}`;
+        
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    // Check commands
+    async checkDataUpdate(deviceSerial) {
+        return await this.addCommand(deviceSerial, 'CHECK', 'CHECK');
+    }
+
+    async checkAndTransmitNewData(deviceSerial) {
+        return await this.addCommand(deviceSerial, 'LOG', 'LOG');
+    }
+
+    async verifyAttendanceData(deviceSerial, startTime, endTime) {
+        const commandData = `VERIFY SUM ATTLOG StartTime=${startTime}\tEndTime=${endTime}`;
+        return await this.addCommand(deviceSerial, 'VERIFY', commandData);
+    }
+
+    // File operations
+    async getFileFromDevice(deviceSerial, filePath) {
+        const commandData = `GetFile ${filePath}`;
+        return await this.addCommand(deviceSerial, 'FILE', commandData);
+    }
+
+    async sendFileToDevice(deviceSerial, url, filePath, action = null, tableName = null, recordCount = null) {
+        let commandData = `PutFile ${url}\t${filePath}`;
+        
+        if (action) {
+            commandData += `\tAction=${action}`;
+            if (tableName) commandData += `\tTableName=${tableName}`;
+            if (recordCount) commandData += `\tRecordCount=${recordCount}`;
+        }
+        
+        return await this.addCommand(deviceSerial, 'FILE', commandData);
+    }
+
+    // System commands
+    async executeShellCommand(deviceSerial, command) {
+        const commandData = `SHELL ${command}`;
+        return await this.addCommand(deviceSerial, 'SYSTEM', commandData);
+    }
+
+    async upgradeDevice(deviceSerial, upgradeInfo) {
+        const { type = null, checksum, size, url } = upgradeInfo;
+        
+        let commandData;
+        if (type) {
+            commandData = `UPGRADE type=${type},checksum=${checksum},size=${size},url=${url}`;
+        } else {
+            commandData = `UPGRADE checksum=${checksum},url=${url},size=${size}`;
+        }
+        
+        return await this.addCommand(deviceSerial, 'UPGRADE', commandData);
+    }
+
+    // Utility method for enrollment commands
+    async enrollCard(deviceSerial, enrollInfo) {
+        const { pin, retry = 3 } = enrollInfo;
+        const commandData = `ENROLL_MF PIN=${pin}\tRETRY=${retry}`;
+        
+        return await this.addCommand(deviceSerial, 'ENROLL', commandData);
+    }
+
+    // Background verification  
+    async backgroundVerification(deviceSerial, verifyData) {
+        const commandData = `PostVerifyData ${verifyData}`;
+        return await this.addCommand(deviceSerial, 'VERIFY', commandData);
+    }
+
+    // Query commands for attendance and photos
+    async queryAttendanceLog(deviceSerial, startTime, endTime) {
+        const commandData = `DATA QUERY ATTLOG StartTime=${startTime}\tEndTime=${endTime}`;
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    }
+
+    async queryAttendancePhoto(deviceSerial, startTime, endTime) {
+        const commandData = `DATA QUERY ATTPHOTO StartTime=${startTime}\tEndTime=${endTime}`;
+        return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 }
 

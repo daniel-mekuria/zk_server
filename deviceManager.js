@@ -60,9 +60,17 @@ class DeviceManager {
             { key: 'transInterval', value: '1' },
             { key: 'timeZone', value: '8' },
             { key: 'realtime', value: '1' },
+            { key: 'operlogStamp', value: 'None' },
             { key: 'biodataStamp', value: 'None' },
+            { key: 'idcardStamp', value: 'None' },
+            { key: 'errorlogStamp', value: 'None' },
             { key: 'multiBioDataSupport', value: '0:1:1:0:0:0:0:1:1:1' },
-            { key: 'multiBioPhotoSupport', value: '0:1:1:0:0:0:0:1:1:1' }
+            { key: 'multiBioPhotoSupport', value: '0:1:1:0:0:0:0:1:1:1' },
+            { key: 'FingerFunOn', value: '1' },
+            { key: 'FaceFunOn', value: '1' },
+            { key: 'BioPhotoFun', value: '1' },
+            { key: 'BioDataFun', value: '1' },
+            { key: 'VisilightFun', value: '1' }
         ];
 
         for (const config of defaultConfigs) {

@@ -65,10 +65,25 @@ class ZKPushServer {
 
     async handleInitialization(req, res) {
         try {
-            const { SN: serialNumber, options, pushver, language, pushcommkey } = req.query;
+            const { SN: serialNumber, options, pushver, language, pushcommkey, table, PIN } = req.query;
             
             if (!serialNumber) {
                 return res.status(400).send('Missing serial number');
+            }
+
+            // Handle remote attendance request
+            if (table === 'RemoteAtt' && PIN) {
+                console.log(`Remote attendance request for PIN ${PIN} from device ${serialNumber}`);
+                const result = await this.dataProcessor.processRemoteAttendance(serialNumber, { PIN });
+                
+                res.set('Date', new Date().toUTCString());
+                res.set('Content-Type', 'text/plain');
+                
+                if (result.success && result.userData) {
+                    return res.send(result.userData);
+                } else {
+                    return res.send('OK'); // No user data found
+                }
             }
 
             console.log(`Device initialization: ${serialNumber}`);
@@ -102,23 +117,26 @@ class ZKPushServer {
         const lines = [
             `GET OPTION FROM: ${serialNumber}`,
             `ATTLOGStamp=None`, // We don't handle attendance
-            `OPERLOGStamp=None`, // We don't handle operation logs
+            `OPERLOGStamp=${config.operlogStamp || 'None'}`,
             `ATTPHOTOStamp=None`, // We don't handle attendance photos
             `BIODATAStamp=${config.biodataStamp || 'None'}`,
+            `IDCARDStamp=${config.idcardStamp || 'None'}`,
+            `ERRORLOGStamp=${config.errorlogStamp || 'None'}`,
             `ErrorDelay=${config.errorDelay || 30}`,
             `Delay=${config.delay || 10}`,
             `TransTimes=${config.transTimes || '00:00;12:00'}`,
             `TransInterval=${config.transInterval || 1}`,
-            `TransFlag=TransData EnrollUser ChgUser EnrollFP ChgFP FACE UserPic BioPhoto WORKCODE`,
+            `TransFlag=TransData EnrollUser ChgUser EnrollFP ChgFP FACE UserPic BioPhoto WORKCODE FVEIN`,
             `TimeZone=${config.timeZone || 8}`,
             `Realtime=${config.realtime || 1}`,
             `Encrypt=None`, // No encryption as requested
             `ServerVer=2.4.1`,
             `PushProtVer=2.4.1`,
             `PushOptionsFlag=1`,
-            `PushOptions=FingerFunOn,FaceFunOn,MultiBioDataSupport,MultiBioPhotoSupport`,
-            `MultiBioDataSupport=0:1:1:0:0:0:0:1:1:1`,
-            `MultiBioPhotoSupport=0:1:1:0:0:0:0:1:1:1`
+            `PushOptions=FingerFunOn,FaceFunOn,MultiBioDataSupport,MultiBioPhotoSupport,BioPhotoFun,BioDataFun,VisilightFun`,
+            `MultiBioDataSupport=${config.multiBioDataSupport || '0:1:1:0:0:0:0:1:1:1'}`,
+            `MultiBioPhotoSupport=${config.multiBioPhotoSupport || '0:1:1:0:0:0:0:1:1:1'}`,
+            `ATTPHOTOBase64=1` // Enable base64 encoding for photos
         ];
         
         return lines.join('\n');
@@ -126,11 +144,25 @@ class ZKPushServer {
 
     async handleDataUpload(req, res) {
         try {
-            const { SN: serialNumber, table, Stamp: stamp } = req.query;
+            const { SN: serialNumber, table, Stamp: stamp, ContentType: contentType, type } = req.query;
             const data = req.body.toString();
             
             if (!serialNumber) {
                 return res.status(400).send('Missing serial number');
+            }
+
+            // Handle background verification requests
+            if (type === 'PostVerifyData') {
+                console.log(`Background verification request from ${serialNumber}: ${data}`);
+                
+                // Process the verification data
+                // In a real implementation, you would:
+                // 1. Parse the verification data
+                // 2. Perform business logic validation  
+                // 3. Return appropriate response
+                
+                res.set('Date', new Date().toUTCString());
+                return res.send('OK');
             }
 
             console.log(`Data upload from ${serialNumber}, table: ${table}`);
@@ -149,6 +181,31 @@ class ZKPushServer {
                     break;
                 case 'IDCARD':
                     result = await this.dataProcessor.processIdCard(serialNumber, data, stamp);
+                    break;
+                case 'FVEIN':
+                    result = await this.dataProcessor.processFingerVeinData(serialNumber, data, stamp);
+                    break;
+                case 'WORKCODE':
+                    result = await this.dataProcessor.processWorkCode(serialNumber, data, stamp);
+                    break;
+                case 'SMS':
+                    result = await this.dataProcessor.processShortMessage(serialNumber, data, stamp);
+                    break;
+                case 'USER_SMS':
+                    result = await this.dataProcessor.processUserSMS(serialNumber, data, stamp);
+                    break;
+                case 'ERRORLOG':
+                    result = await this.dataProcessor.processErrorLog(serialNumber, data, stamp);
+                    break;
+                case 'RemoteAtt':
+                    // Handle remote attendance request
+                    result = await this.dataProcessor.processRemoteAttendance(serialNumber, req.query);
+                    if (result.success && result.userData) {
+                        // Send user data back for remote attendance
+                        res.set('Date', new Date().toUTCString());
+                        res.set('Content-Type', 'text/plain');
+                        return res.send(result.userData);
+                    }
                     break;
                 default:
                     result = { success: false, message: `Unsupported table: ${table}` };
@@ -242,16 +299,28 @@ class ZKPushServer {
         try {
             const { SN: serialNumber, url } = req.query;
             
-            if (!serialNumber || !url) {
-                return res.status(400).send('Missing parameters');
+            if (!serialNumber) {
+                return res.status(400).send('Missing serial number');
             }
 
-            // Handle file requests (for firmware updates, etc.)
             console.log(`File request from ${serialNumber}: ${url}`);
             
-            // Return empty file for now
-            res.set('Content-Type', 'application/octet-stream');
-            res.send('');
+            if (url) {
+                // Handle specific file download request
+                // This would typically serve files for firmware updates, etc.
+                // For now, return a basic response
+                res.set('Content-Type', 'application/octet-stream');
+                res.set('Content-Disposition', 'attachment; filename="file.bin"');
+                
+                // In a real implementation, you would:
+                // 1. Validate the file path
+                // 2. Check permissions
+                // 3. Serve the actual file
+                res.send(Buffer.alloc(0)); // Empty file for now
+            } else {
+                // No specific file requested
+                res.status(404).send('File not found');
+            }
             
         } catch (error) {
             console.error('File request error:', error);
