@@ -19,6 +19,8 @@ class ManagementAPI {
         // User management
         this.router.get('/users', this.getUsers.bind(this));
         this.router.get('/users/:pin', this.getUser.bind(this));
+        this.router.post('/users', this.addUser.bind(this));
+        this.router.delete('/users/:pin', this.deleteUser.bind(this));
 
         // Command management
         this.router.get('/commands', this.getCommands.bind(this));
@@ -29,6 +31,9 @@ class ManagementAPI {
         // System status
         this.router.get('/status', this.getSystemStatus.bind(this));
         this.router.get('/stats', this.getSystemStats.bind(this));
+        
+        // Manual sync
+        this.router.post('/sync/manual', this.triggerManualSync.bind(this));
 
         // Add endpoint for creating users with multiple biometric modalities
         this.router.post('/users/biometric-add', this.addUserWithBiometrics.bind(this));
@@ -185,6 +190,419 @@ class ManagementAPI {
                 }
             });
         } catch (error) {
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    async addUser(req, res) {
+        try {
+            const { name } = req.body;
+            
+            if (!name || name.trim() === '') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'User name is required'
+                });
+            }
+
+            // Find the next available PIN (user ID)
+            // Get the highest numeric PIN and increment by 1
+            const result = await this.db.get(`
+                SELECT MAX(CAST(pin AS INTEGER)) as maxPin 
+                FROM users 
+                WHERE pin GLOB '[0-9]*'
+            `);
+            
+            const nextPin = result && result.maxPin ? (result.maxPin + 1).toString() : '1';
+            
+            console.log(`🔍 Creating new user with PIN: ${nextPin}, Name: ${name}`);
+            
+            // Insert the new user
+            await this.db.run(`
+                INSERT INTO users 
+                (pin, name, privilege, password, card, group_id, time_zone, verify_mode, vice_card)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                nextPin,
+                name.trim(),
+                0,           // privilege: normal user
+                '',          // password: empty
+                '',          // card: empty
+                1,           // group_id: default group
+                '0000000000000000', // time_zone: default
+                -1,          // verify_mode: default
+                ''           // vice_card: empty
+            ]);
+
+            // Get the created user
+            const createdUser = await this.db.get('SELECT * FROM users WHERE pin = ?', [nextPin]);
+            
+            console.log(`✅ User created successfully: PIN=${nextPin}, Name=${name}`);
+
+            // Now sync the new user across all active devices
+            const activeDevices = await this.deviceManager.getActiveDevices();
+            const syncCommandResults = [];
+            
+            for (const device of activeDevices) {
+                try {
+                    // Create add user command for this device
+                    const syncResult = await this.commandManager.addUser(device.serial_number, {
+                        pin: nextPin,
+                        name: name.trim(),
+                        privilege: 0,
+                        password: '',
+                        card: '',
+                        groupId: 1,
+                        timeZone: '0000000000000000',
+                        verifyMode: -1,
+                        viceCard: ''
+                    });
+                    syncCommandResults.push({
+                        device: device.serial_number,
+                        success: true,
+                        commandId: syncResult.commandId
+                    });
+                    console.log(`📤 Add user command queued for device ${device.serial_number}`);
+                } catch (error) {
+                    console.error(`❌ Failed to queue add user command for device ${device.serial_number}:`, error);
+                    syncCommandResults.push({
+                        device: device.serial_number,
+                        success: false,
+                        error: error.message
+                    });
+                }
+            }
+            
+            const successfulSyncs = syncCommandResults.filter(r => r.success).length;
+
+            res.json({
+                success: true,
+                message: `User created successfully with ID ${nextPin} and sync commands sent to ${successfulSyncs}/${activeDevices.length} devices`,
+                data: {
+                    userId: nextPin,
+                    user: createdUser,
+                    deviceSync: {
+                        totalDevices: activeDevices.length,
+                        successfulCommands: successfulSyncs,
+                        results: syncCommandResults
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error('Error creating user:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    async deleteUser(req, res) {
+        try {
+            const { pin } = req.params;
+            
+            console.log(`🔍 DELETE request for PIN: "${pin}" (type: ${typeof pin})`);
+            
+            // Check if user exists
+            const user = await this.db.get('SELECT * FROM users WHERE pin = ?', [pin]);
+            console.log(`🔍 Database lookup result:`, user);
+            
+            if (!user) {
+                // Let's also check what users exist with similar PINs
+                const similarUsers = await this.db.all('SELECT pin, id FROM users WHERE pin LIKE ?', [`%${pin}%`]);
+                console.log(`🔍 Similar PINs found:`, similarUsers);
+                
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found'
+                });
+            }
+
+            // Delete user and all related biometric data
+            await this.db.run('BEGIN TRANSACTION');
+            
+            try {
+                // Delete from all biometric tables
+                await this.db.run('DELETE FROM fingerprint_templates WHERE pin = ?', [pin]);
+                await this.db.run('DELETE FROM face_templates WHERE pin = ?', [pin]);
+                await this.db.run('DELETE FROM bio_templates WHERE pin = ?', [pin]);
+                await this.db.run('DELETE FROM user_photos WHERE pin = ?', [pin]);
+                await this.db.run('DELETE FROM comparison_photos WHERE pin = ?', [pin]);
+                
+                // Delete the user record
+                await this.db.run('DELETE FROM users WHERE pin = ?', [pin]);
+                
+                await this.db.run('COMMIT');
+                
+                console.log(`✅ User ${pin} and all related biometric data deleted from database`);
+                
+                // Now sync the deletion across all active devices
+                const activeDevices = await this.deviceManager.getActiveDevices();
+                const deleteCommandResults = [];
+                
+                for (const device of activeDevices) {
+                    try {
+                        // Create delete user command for this device
+                        const deleteResult = await this.commandManager.deleteUser(device.serial_number, pin);
+                        deleteCommandResults.push({
+                            device: device.serial_number,
+                            success: true,
+                            commandId: deleteResult.commandId
+                        });
+                        console.log(`📤 Delete user command queued for device ${device.serial_number}`);
+                    } catch (error) {
+                        console.error(`❌ Failed to queue delete command for device ${device.serial_number}:`, error);
+                        deleteCommandResults.push({
+                            device: device.serial_number,
+                            success: false,
+                            error: error.message
+                        });
+                    }
+                }
+                
+                const successfulDeletes = deleteCommandResults.filter(r => r.success).length;
+                
+                res.json({
+                    success: true,
+                    message: `User ${pin} deleted successfully from database and deletion commands sent to ${successfulDeletes}/${activeDevices.length} devices`,
+                    data: {
+                        deletedUser: user,
+                        deviceSync: {
+                            totalDevices: activeDevices.length,
+                            successfulCommands: successfulDeletes,
+                            results: deleteCommandResults
+                        }
+                    }
+                });
+                
+            } catch (error) {
+                await this.db.run('ROLLBACK');
+                throw error;
+            }
+            
+        } catch (error) {
+            console.error('Error deleting user:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    async triggerManualSync(req, res) {
+        try {
+            const { sourceDevice, targetDevices, syncType = 'all' } = req.body;
+            
+            let source = null;
+            let syncFromDatabase = false;
+            
+            if (sourceDevice) {
+                // Sync from specific device
+                source = await this.deviceManager.getDevice(sourceDevice);
+                if (!source) {
+                    return res.status(404).json({
+                        success: false,
+                        error: 'Source device not found'
+                    });
+                }
+            } else {
+                // Sync from database to all devices
+                syncFromDatabase = true;
+                console.log('📤 Manual sync: Database -> All Devices');
+            }
+
+            // Determine target devices
+            let targets = [];
+            if (targetDevices && Array.isArray(targetDevices)) {
+                // Validate each target device
+                for (const deviceSerial of targetDevices) {
+                    const device = await this.deviceManager.getDevice(deviceSerial);
+                    if (device) {
+                        targets.push(device);
+                    }
+                }
+            } else {
+                // Sync to all active devices (or all except source if specified)
+                const allDevices = await this.deviceManager.getActiveDevices();
+                if (syncFromDatabase) {
+                    targets = allDevices; // Sync to ALL devices when syncing from database
+                } else {
+                    targets = allDevices.filter(device => device.serial_number !== sourceDevice);
+                }
+            }
+
+            if (targets.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No valid target devices found'
+                });
+            }
+
+            const syncSource = syncFromDatabase ? 'Database' : sourceDevice;
+            const syncTarget = targets.map(t => t.serial_number).join(', ');
+            console.log(`🔄 Manual sync triggered: ${syncSource} -> ${syncTarget}`);
+            
+            const syncResults = [];
+            
+            // Get data to sync based on syncType
+            let syncData = {};
+            
+            if (syncType === 'all' || syncType === 'users') {
+                if (syncFromDatabase) {
+                    const users = await this.db.all('SELECT * FROM users');
+                    syncData.users = users;
+                } else {
+                    const users = await this.db.all('SELECT * FROM users WHERE device_serial = ?', [sourceDevice]);
+                    syncData.users = users;
+                }
+            }
+            
+            if (syncType === 'all' || syncType === 'fingerprints') {
+                if (syncFromDatabase) {
+                    const fingerprints = await this.db.all('SELECT * FROM fingerprint_templates');
+                    syncData.fingerprints = fingerprints;
+                } else {
+                    const fingerprints = await this.db.all('SELECT * FROM fingerprint_templates WHERE device_serial = ?', [sourceDevice]);
+                    syncData.fingerprints = fingerprints;
+                }
+            }
+            
+            if (syncType === 'all' || syncType === 'faces') {
+                if (syncFromDatabase) {
+                    const faces = await this.db.all('SELECT * FROM face_templates');
+                    syncData.faces = faces;
+                } else {
+                    const faces = await this.db.all('SELECT * FROM face_templates WHERE device_serial = ?', [sourceDevice]);
+                    syncData.faces = faces;
+                }
+            }
+            
+            if (syncType === 'all' || syncType === 'bio') {
+                if (syncFromDatabase) {
+                    const bioTemplates = await this.db.all('SELECT * FROM bio_templates');
+                    syncData.bioTemplates = bioTemplates;
+                } else {
+                    const bioTemplates = await this.db.all('SELECT * FROM bio_templates WHERE device_serial = ?', [sourceDevice]);
+                    syncData.bioTemplates = bioTemplates;
+                }
+            }
+
+            // Create sync commands for each target device
+            for (const target of targets) {
+                const targetSerial = target.serial_number;
+                let commandsCreated = 0;
+                
+                try {
+                    // Sync users
+                    if (syncData.users) {
+                        for (const user of syncData.users) {
+                            await this.commandManager.addUser(targetSerial, {
+                                pin: user.pin,
+                                name: user.name,
+                                privilege: user.privilege,
+                                password: user.password,
+                                card: user.card,
+                                groupId: user.group_id,
+                                timeZone: user.time_zone,
+                                verifyMode: user.verify_mode
+                            });
+                            commandsCreated++;
+                        }
+                    }
+                    
+                    // Sync fingerprint templates
+                    if (syncData.fingerprints) {
+                        for (const fp of syncData.fingerprints) {
+                            await this.commandManager.addFingerprintTemplate(targetSerial, {
+                                PIN: fp.pin,
+                                FID: fp.fid,
+                                Size: fp.size,
+                                Valid: fp.valid,
+                                TMP: fp.template_data
+                            });
+                            commandsCreated++;
+                        }
+                    }
+                    
+                    // Sync face templates
+                    if (syncData.faces) {
+                        for (const face of syncData.faces) {
+                            await this.commandManager.addFaceTemplate(targetSerial, {
+                                pin: face.pin,
+                                fid: face.fid,
+                                size: face.size,
+                                valid: face.valid,
+                                template: face.template_data
+                            });
+                            commandsCreated++;
+                        }
+                    }
+                    
+                    // Sync bio templates
+                    if (syncData.bioTemplates) {
+                        for (const bio of syncData.bioTemplates) {
+                            await this.commandManager.addBiodataTemplate(targetSerial, {
+                                pin: bio.pin,
+                                no: bio.bio_no,
+                                index: bio.bio_index,
+                                valid: bio.valid,
+                                duress: bio.duress,
+                                type: bio.bio_type,
+                                majorVer: bio.major_ver,
+                                minorVer: bio.minor_ver,
+                                format: bio.format,
+                                template: bio.template_data
+                            });
+                            commandsCreated++;
+                        }
+                    }
+                    
+                    syncResults.push({
+                        device: targetSerial,
+                        success: true,
+                        commandsCreated
+                    });
+                    
+                } catch (error) {
+                    console.error(`Error syncing to device ${targetSerial}:`, error);
+                    syncResults.push({
+                        device: targetSerial,
+                        success: false,
+                        error: error.message
+                    });
+                }
+            }
+            
+            const successfulSyncs = syncResults.filter(r => r.success).length;
+            const totalCommands = syncResults.reduce((sum, r) => sum + (r.commandsCreated || 0), 0);
+            
+            res.json({
+                success: successfulSyncs > 0,
+                message: `Manual sync completed: ${successfulSyncs}/${targets.length} devices, ${totalCommands} commands queued`,
+                data: {
+                    syncSource: syncFromDatabase ? 'Database' : sourceDevice,
+                    sourceDevice: syncFromDatabase ? null : sourceDevice,
+                    syncFromDatabase,
+                    syncType,
+                    targetDevices: targets.length,
+                    successfulSyncs,
+                    totalCommands,
+                    syncData: {
+                        users: syncData.users?.length || 0,
+                        fingerprints: syncData.fingerprints?.length || 0,
+                        faces: syncData.faces?.length || 0,
+                        bioTemplates: syncData.bioTemplates?.length || 0
+                    },
+                    results: syncResults
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error in manual sync:', error);
             res.status(500).json({
                 success: false,
                 error: error.message

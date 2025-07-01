@@ -185,8 +185,8 @@ class DeviceManager {
             const threshold = moment().subtract(minutesThreshold, 'minutes').format('YYYY-MM-DD HH:mm:ss');
             
             return await this.db.all(
-                'SELECT * FROM devices WHERE last_seen > ? ORDER BY last_seen DESC',
-                [threshold]
+                'SELECT * FROM devices '
+                
             );
         } catch (error) {
             console.error('Error getting active devices:', error);
