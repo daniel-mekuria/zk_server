@@ -531,28 +531,39 @@ class DataProcessor {
 
     async syncBiodataToOtherDevices(sourceDevice, biodataFields) {
         try {
-            // Get all other connected devices
-            const otherDevices = await this.db.all(
-                'SELECT DISTINCT device_serial FROM devices WHERE device_serial != ? AND last_seen > datetime("now", "-5 minutes")',
-                [sourceDevice]
-            );
+            // Get all registered devices and filter out the source device
+            const allDevices = await this.deviceManager.getAllDevices();
+            const otherDevices = allDevices.filter(device => device.serial_number !== sourceDevice);
+
+            console.log(`🔍 SYNC DEBUG - Source: ${sourceDevice}`);
+            console.log(`🔍 Total devices in DB: ${allDevices.length}`);
+            console.log(`🔍 Other devices to sync to: ${otherDevices.length}`);
+            console.log(`🔍 Target device serials:`, otherDevices.map(d => d.serial_number));
 
             if (otherDevices.length === 0) {
-                console.log('🔄 No other devices online for BIODATA sync');
+                console.log('❌ No other devices to sync BIODATA to');
                 return;
             }
 
-            console.log(`🔄 Syncing BIODATA from ${sourceDevice} to ${otherDevices.length} devices`);
+            console.log(`✅ Syncing BIODATA from ${sourceDevice} to ${otherDevices.length} devices`);
 
             const CommandManager = require('./commandManager');
             const commandManager = new CommandManager(this.db);
 
             for (const device of otherDevices) {
                 try {
+                    console.log(`🔄 Creating sync commands for ${device.serial_number}: 1 BIODATA records`);
+                    
                     // Generate BIODATA sync command following exact protocol specification
                     // Format: DATA UPDATE BIODATA Pin=${XXX}${HT}No=${XXX}${HT}Index=${XXX}${HT}Valid=${XXX}${HT}Duress=${XXX}${HT}Type=${XXX}${HT}MajorVer=${XXX}${HT}MinorVer=${XXX}${HT}Format=${XXX}${HT}Tmp=${XXX}
                     
-                    const result = await commandManager.addBiodataTemplate(device.device_serial, {
+                    console.log(`🔍 BIODATA SYNC DEBUG for PIN ${biodataFields.Pin}:`);
+                    console.log(`   📄 Raw parsed data:`, JSON.stringify(biodataFields, null, 2));
+                    console.log(`   🔗 Fields: Pin=${biodataFields.Pin}, No=${biodataFields.No}, Index=${biodataFields.Index}, Valid=${biodataFields.Valid}`);
+                    console.log(`   📋 Bio fields: Type=${biodataFields.Type}, MajorVer=${biodataFields.MajorVer}, MinorVer=${biodataFields.MinorVer}, Format=${biodataFields.Format}`);
+                    console.log(`   📝 Template length: ${biodataFields.Tmp ? biodataFields.Tmp.length : 'undefined'}`);
+                    
+                    const result = await commandManager.addBiodataTemplate(device.serial_number, {
                         pin: biodataFields.Pin,
                         no: biodataFields.No || 0,
                         index: biodataFields.Index || 0,
@@ -564,16 +575,19 @@ class DataProcessor {
                         format: biodataFields.Format || 'ZK', // Preserve original format value
                         template: biodataFields.Tmp
                     });
+                    console.log(`   ✅ BIODATA sync result:`, result);
 
                     if (result.success) {
-                        console.log(`✅ BIODATA sync queued for device ${device.device_serial} - PIN ${biodataFields.Pin}, Type ${biodataFields.Type}`);
+                        console.log(`✅ BIODATA sync queued for device ${device.serial_number} - PIN ${biodataFields.Pin}, Type ${biodataFields.Type}`);
                     } else {
-                        console.log(`❌ Failed to queue BIODATA sync for device ${device.device_serial}: ${result.error}`);
+                        console.log(`❌ Failed to queue BIODATA sync for device ${device.serial_number}: ${result.error}`);
                     }
                 } catch (error) {
-                    console.error(`Error syncing BIODATA to device ${device.device_serial}:`, error);
+                    console.error(`Error syncing BIODATA to device ${device.serial_number}:`, error);
                 }
             }
+
+            console.log(`✅ Sync commands created for device ${otherDevices.map(d => d.serial_number).join(', ')}: 1 queued, 0 skipped`);
         } catch (error) {
             console.error('Error syncing BIODATA to other devices:', error);
         }

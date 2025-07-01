@@ -16,7 +16,7 @@ class CommandManager {
                 VALUES (?, ?, ?, ?, 'pending')
             `, [commandId, deviceSerial, commandType, commandData]);
 
-            console.log(`Command added for device ${deviceSerial}: ${commandType}`);
+            console.log('Command added for device ' + deviceSerial + ': ' + commandType);
             return { success: true, commandId };
         } catch (error) {
             console.error('Error adding command:', error);
@@ -46,7 +46,7 @@ class CommandManager {
             // Format command according to ZK protocol
             const formattedCommand = this.formatCommand(command);
             
-            console.log(`Sending command to ${deviceSerial}: ${formattedCommand}`);
+            console.log('Sending command to ' + deviceSerial + ': ' + formattedCommand);
             return formattedCommand;
         } catch (error) {
             console.error('Error getting next command:', error);
@@ -55,8 +55,162 @@ class CommandManager {
     }
 
     formatCommand(command) {
+        // Validate and fix tab formatting before sending
+        const correctedCommandData = this.validateAndFixTabs(command.command_data);
+        
         // Format: C:${CmdID}:${CmdDesc} ${CmdData}
-        return `C:${command.command_id}:${command.command_data}`;
+        return 'C:' + command.command_id + ':' + correctedCommandData;
+    }
+
+    validateAndFixTabs(commandData) {
+        // Check if this is a command that requires tab separation
+        if (!commandData || typeof commandData !== 'string') {
+            return commandData;
+        }
+
+        // Commands that should have tab-separated parameters
+        const tabCommands = [
+            'DATA UPDATE BIODATA',
+            'DATA UPDATE USERPIC', 
+            'DATA UPDATE BIOPHOTO',
+            'DATA UPDATE WORKCODE',
+            'DATA UPDATE FVEIN',
+            'DATA UPDATE SMS',
+            'DATA UPDATE USER_SMS',
+            'DATA UPDATE IDCARD',
+            'DATA DELETE FINGERTMP',
+            'DATA QUERY FINGERTMP',
+            'ENROLL_FP',
+            'ENROLL_BIO',
+            'ENROLL_MF',
+            'VERIFY SUM ATTLOG',
+            'DATA QUERY ATTLOG',
+            'DATA QUERY ATTPHOTO',
+            'PutFile'
+        ];
+
+        // Check if this command needs tab validation
+        const needsTabValidation = tabCommands.some(cmd => commandData.startsWith(cmd));
+        
+        if (!needsTabValidation) {
+            return commandData;
+        }
+
+        console.log('🔍 Validating tabs for command: ' + commandData.substring(0, 50) + '...');
+
+        // Split by spaces and look for key=value patterns that should be tab-separated
+        const parts = commandData.split(' ');
+        if (parts.length < 2) {
+            return commandData;
+        }
+
+        const commandPrefix = parts[0] + ' ' + parts[1] + (parts[2] ? ' ' + parts[2] : '');
+        const remainingParts = parts.slice(parts[2] ? 3 : 2);
+
+        // Special handling for BIODATA commands
+        if (commandData.startsWith('DATA UPDATE BIODATA')) {
+            return this.validateBiodataCommand(commandData);
+        }
+
+        // If we have parameters, ensure they're tab-separated
+        if (remainingParts.length > 0) {
+            const parametersString = remainingParts.join(' ');
+            
+            // Check if parameters contain = signs (key=value pairs)
+            if (parametersString.includes('=')) {
+                // Split by various possible separators and rejoin with tabs
+                let correctedParams = parametersString
+                    .replace(/\s+([A-Za-z_]+)=/g, '\t$1=')  // Replace space before key= with tab
+                    .replace(/^([A-Za-z_]+)=/, '$1=');      // Ensure first param doesn't start with tab
+                
+                const correctedCommand = commandPrefix + ' ' + correctedParams;
+                
+                if (correctedCommand !== commandData) {
+                    console.log('✅ Tab formatting corrected:');
+                    console.log('   Original: ' + commandData);
+                    console.log('   Corrected: ' + correctedCommand);
+                }
+                
+                return correctedCommand;
+            }
+        }
+
+        console.log('✅ Tab formatting verified - no changes needed');
+        return commandData;
+    }
+
+    validateBiodataCommand(commandData) {
+        console.log('🔧 Special BIODATA validation for: ' + commandData.substring(0, 100) + '...');
+        
+        // Split the command into prefix and parameters
+        const commandPrefix = 'DATA UPDATE BIODATA ';
+        if (!commandData.startsWith(commandPrefix)) {
+            return commandData;
+        }
+        
+        const paramsString = commandData.substring(commandPrefix.length);
+        console.log('🔍 Raw parameters: ' + paramsString.substring(0, 200) + '...');
+        
+        // Use a more direct approach - split by all whitespace first, then extract values
+        const params = {};
+        
+        // Extract each parameter individually using specific patterns
+        const extractParam = (name, str) => {
+            const pattern = new RegExp(name + '=([^\\s\\t]+)', 'i');
+            const match = str.match(pattern);
+            return match ? match[1] : null;
+        };
+        
+        // Special handling for Tmp parameter (it's the last one and can contain anything)
+        const extractTmp = (str) => {
+            const tmpMatch = str.match(/Tmp=(.*)$/i);
+            return tmpMatch ? tmpMatch[1] : null;
+        };
+        
+        // Extract all parameters
+        params.Pin = extractParam('Pin', paramsString);
+        params.No = extractParam('No', paramsString);
+        params.Index = extractParam('Index', paramsString);
+        params.Valid = extractParam('Valid', paramsString);
+        params.Duress = extractParam('Duress', paramsString);
+        params.Type = extractParam('Type', paramsString);
+        params.MajorVer = extractParam('MajorVer', paramsString);
+        params.MinorVer = extractParam('MinorVer', paramsString);
+        params.Format = extractParam('Format', paramsString);
+        params.Tmp = extractTmp(paramsString);
+        
+        // Log what we found
+        for (const [key, value] of Object.entries(params)) {
+            if (value !== null) {
+                const displayValue = value && value.length > 50 ? value.substring(0, 50) + '...' : value;
+                console.log('📝 Found ' + key + '=' + displayValue);
+            }
+        }
+        
+        // Build the corrected command with proper tab separation
+        const orderedParams = ['Pin', 'No', 'Index', 'Valid', 'Duress', 'Type', 'MajorVer', 'MinorVer', 'Format', 'Tmp'];
+        const rebuiltParams = orderedParams
+            .filter(param => params[param] !== null && params[param] !== undefined)
+            .map(param => param + '=' + params[param])
+            .join('\t');
+        
+        const correctedCommand = commandPrefix + rebuiltParams;
+        
+        // Always rebuild to ensure proper tab formatting
+        const hasProperTabs = commandData.includes('\t') && (commandData.match(/\t/g) || []).length >= 8;
+        
+        if (!hasProperTabs || correctedCommand !== commandData) {
+            console.log('🔧 BIODATA command corrected:');
+            console.log('   Original length: ' + commandData.length);
+            console.log('   Corrected length: ' + correctedCommand.length);
+            console.log('   Tab count in original: ' + (commandData.match(/\t/g) || []).length);
+            console.log('   Tab count in corrected: ' + (correctedCommand.match(/\t/g) || []).length);
+            console.log('   Proper tabs: ' + (hasProperTabs ? 'YES' : 'NO'));
+            return correctedCommand;
+        } else {
+            console.log('✅ BIODATA command format is correct');
+            return commandData;
+        }
     }
 
     async processCommandReply(deviceSerial, replyData) {
@@ -71,7 +225,7 @@ class CommandManager {
                     WHERE command_id = ? AND device_serial = ?
                 `, ['completed', replyData, reply.ID, deviceSerial]);
 
-                console.log(`Command reply processed: ${reply.ID} -> Return: ${reply.Return}`);
+                console.log('Command reply processed: ' + reply.ID + ' -> Return: ' + reply.Return);
                 
                 // Handle specific command results
                 await this.handleCommandResult(deviceSerial, reply);
@@ -100,7 +254,11 @@ class CommandManager {
 
     async handleCommandResult(deviceSerial, reply) {
         // Handle specific command results based on command type
-        switch (reply.CMD) {
+        // Normalize command type to handle any whitespace issues
+        const cmdType = reply.CMD ? reply.CMD.trim().toUpperCase() : '';
+        console.log('🔍 Processing command result: CMD="' + cmdType + '" (original: "' + reply.CMD + '"), Return: ' + reply.Return);
+        
+        switch (cmdType) {
             case 'DATA':
                 await this.handleDataCommandResult(deviceSerial, reply);
                 break;
@@ -118,25 +276,25 @@ class CommandManager {
             case 'REBOOT':
             case 'AC_UNLOCK':
             case 'AC_UNALARM':
-                console.log(`🔧 Control command ${reply.CMD} result for device ${deviceSerial}: ${reply.Return === '0' ? 'Success' : 'Failed'}`);
+                console.log('🔧 Control command ' + cmdType + ' result for device ' + deviceSerial + ': ' + (reply.Return === '0' ? 'Success' : 'Failed'));
                 break;
             case 'CHECK':
             case 'LOG':
             case 'VERIFY':
-                console.log(`📊 Check command ${reply.CMD} result for device ${deviceSerial}: ${reply.Return === '0' ? 'Success' : 'Failed'}`);
+                console.log('📊 Check command ' + cmdType + ' result for device ' + deviceSerial + ': ' + (reply.Return === '0' ? 'Success' : 'Failed'));
                 break;
             case 'INFO':
-                console.log(`ℹ️ Info command result for device ${deviceSerial}: ${reply.Return === '0' ? 'Success' : 'Failed'}`);
+                console.log('ℹ️ Info command result for device ' + deviceSerial + ': ' + (reply.Return === '0' ? 'Success' : 'Failed'));
                 break;
             default:
-                console.log(`❓ Unhandled command result: ${reply.CMD} for device ${deviceSerial}`);
+                console.log('❓ Unhandled command result: "' + cmdType + '" (original: "' + reply.CMD + '") for device ' + deviceSerial + ', Return: ' + reply.Return);
         }
     }
 
     async handleDataCommandResult(deviceSerial, reply) {
         // Handle DATA command results
         if (reply.Return === '0') {
-            console.log(`✅ Data command successful for device ${deviceSerial}`);
+            console.log('✅ Data command successful for device ' + deviceSerial);
         } else {
             const errorCode = reply.Return;
             let errorDescription = 'Unknown error';
@@ -190,11 +348,11 @@ class CommandManager {
                     break;
             }
             
-            console.log(`❌ Data command failed for device ${deviceSerial}, error code: ${errorCode} (${errorDescription})`);
+            console.log('❌ Data command failed for device ' + deviceSerial + ', error code: ' + errorCode + ' (' + errorDescription + ')');
             
             // Special handling for template-related errors
             if (errorCode === '-11' || errorCode === '-12') {
-                console.log(`🔧 Template format issue detected. This may be due to algorithm version mismatch or corrupted template data.`);
+                console.log('🔧 Template format issue detected. This may be due to algorithm version mismatch or corrupted template data.');
             }
         }
     }
@@ -202,18 +360,18 @@ class CommandManager {
     async handleClearCommandResult(deviceSerial, reply) {
         // Handle CLEAR command results
         if (reply.Return === '0') {
-            console.log(`Clear command successful for device ${deviceSerial}`);
+            console.log('Clear command successful for device ' + deviceSerial);
         } else {
-            console.log(`Clear command failed for device ${deviceSerial}, return code: ${reply.Return}`);
+            console.log('Clear command failed for device ' + deviceSerial + ', return code: ' + reply.Return);
         }
     }
 
     async handleEnrollCommandResult(deviceSerial, reply) {
         // Handle enrollment command results
         if (reply.Return === '0') {
-            console.log(`Enrollment successful for device ${deviceSerial}`);
+            console.log('Enrollment successful for device ' + deviceSerial);
         } else {
-            console.log(`Enrollment failed for device ${deviceSerial}, return code: ${reply.Return}`);
+            console.log('Enrollment failed for device ' + deviceSerial + ', return code: ' + reply.Return);
         }
     }
 
@@ -222,18 +380,18 @@ class CommandManager {
         const { pin, name, privilege = 0, password = '', card = '', groupId = 1, timeZone = '0000000000000000', verifyMode = -1, viceCard = '' } = userInfo;
         
         const TAB = '\t';
-        const commandData = `DATA UPDATE USERINFO PIN=${pin}${TAB}Name=${name}${TAB}Pri=${privilege}${TAB}Passwd=${password}${TAB}Card=${card}${TAB}Grp=${groupId}${TAB}TZ=${timeZone}${TAB}Verify=${verifyMode}${TAB}ViceCard=${viceCard}`;
+        const commandData = 'DATA UPDATE USERINFO PIN=' + pin + TAB + 'Name=' + name + TAB + 'Pri=' + privilege + TAB + 'Passwd=' + password + TAB + 'Card=' + card + TAB + 'Grp=' + groupId + TAB + 'TZ=' + timeZone + TAB + 'Verify=' + verifyMode + TAB + 'ViceCard=' + viceCard;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async deleteUser(deviceSerial, pin) {
-        const commandData = `DATA DELETE USERINFO PIN=${pin}`;
+        const commandData = 'DATA DELETE USERINFO PIN=' + pin;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async queryUser(deviceSerial, pin) {
-        const commandData = `DATA QUERY USERINFO PIN=${pin}`;
+        const commandData = 'DATA QUERY USERINFO PIN=' + pin;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -243,7 +401,7 @@ class CommandManager {
         
         // Validate template data to prevent -12 errors
         if (!template || template.length === 0) {
-            console.log(`⚠️ Skipping fingerprint template for PIN ${pin}, FID ${fid} - empty template data`);
+            console.log('⚠️ Skipping fingerprint template for PIN ' + pin + ', FID ' + fid + ' - empty template data');
             return { success: false, error: 'Empty template data' };
         }
 
@@ -252,16 +410,16 @@ class CommandManager {
             // Check if template looks like valid base64
             const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
             if (!base64Regex.test(template)) {
-                console.log(`⚠️ Skipping fingerprint template for PIN ${pin}, FID ${fid} - invalid base64 format`);
+                console.log('⚠️ Skipping fingerprint template for PIN ' + pin + ', FID ' + fid + ' - invalid base64 format');
                 return { success: false, error: 'Invalid base64 format' };
             }
         } catch (error) {
-            console.log(`⚠️ Skipping fingerprint template for PIN ${pin}, FID ${fid} - validation error:`, error.message);
+            console.log('⚠️ Skipping fingerprint template for PIN ' + pin + ', FID ' + fid + ' - validation error:', error.message);
             return { success: false, error: 'Validation failed' };
         }
 
         const TAB = '\t';
-        const commandData = `DATA UPDATE FINGERTMP PIN=${fpData.PIN}${TAB}FID=${fpData.FID}${TAB}Size=${fpData.Size || 0}${TAB}Valid=${fpData.Valid || 1}${TAB}TMP=${fpData.TMP || ''}`;
+        const commandData = 'DATA UPDATE FINGERTMP PIN=' + fpData.PIN + TAB + 'FID=' + fpData.FID + TAB + 'Size=' + (fpData.Size || 0) + TAB + 'Valid=' + (fpData.Valid || 1) + TAB + 'TMP=' + (fpData.TMP || '');
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
@@ -269,9 +427,9 @@ class CommandManager {
     async deleteFingerprintTemplate(deviceSerial, pin, fid = null) {
         let commandData;
         if (fid !== null) {
-            commandData = `DATA DELETE FINGERTMP PIN=${pin}\tFID=${fid}`;
+            commandData = 'DATA DELETE FINGERTMP PIN=' + pin + '\tFID=' + fid;
         } else {
-            commandData = `DATA DELETE FINGERTMP PIN=${pin}`;
+            commandData = 'DATA DELETE FINGERTMP PIN=' + pin;
         }
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
@@ -280,9 +438,9 @@ class CommandManager {
     async queryFingerprintTemplate(deviceSerial, pin, fingerId = null) {
         let commandData;
         if (fingerId !== null) {
-            commandData = `DATA QUERY FINGERTMP PIN=${pin}\tFingerID=${fingerId}`;
+            commandData = 'DATA QUERY FINGERTMP PIN=' + pin + '\tFingerID=' + fingerId;
         } else {
-            commandData = `DATA QUERY FINGERTMP PIN=${pin}`;
+            commandData = 'DATA QUERY FINGERTMP PIN=' + pin;
         }
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
@@ -292,18 +450,19 @@ class CommandManager {
     async addFaceTemplate(deviceSerial, templateInfo) {
         const { pin, fid, size, valid = 1, template } = templateInfo;
         const TAB = '\t';
-        const commandData = `DATA UPDATE FACE PIN=${pin}${TAB}FID=${fid}${TAB}Valid=${valid}${TAB}Size=${size}${TAB}TMP=${template}`;
+        const commandData = 'DATA UPDATE FACE PIN=' + pin + TAB + 'FID=' + fid + TAB + 'Valid=' + valid + TAB + 'Size=' + size + TAB + 'TMP=' + template;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async deleteFaceTemplate(deviceSerial, pin) {
-        const commandData = `DATA DELETE FACE PIN=${pin}`;
+        const commandData = 'DATA DELETE FACE PIN=' + pin;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     // Unified bio template commands (BIODATA format)
     async addBiodataTemplate(deviceSerial, templateInfo) {
+        console.log('templateInfo**********************************************',templateInfo)
         const { 
             pin, 
             no = 0, 
@@ -317,20 +476,20 @@ class CommandManager {
             template 
         } = templateInfo;
         
-        console.log(`🔧 BIODATA COMMAND DEBUG for device ${deviceSerial}:`);
-        console.log(`   📋 Input params: pin=${pin}, no=${no}, index=${index}, valid=${valid}, duress=${duress}`);
-        console.log(`   📊 Bio params: type=${type}, majorVer=${majorVer}, minorVer=${minorVer}, format=${format}`);
-        console.log(`   📝 Template: ${template ? `${template.length} chars, starts with: ${template.substring(0, 20)}...` : 'undefined'}`);
+        console.log('🔧 BIODATA COMMAND DEBUG for device ' + deviceSerial + ':');
+        console.log('   📋 Input params: pin=' + pin + ', no=' + no + ', index=' + index + ', valid=' + valid + ', duress=' + duress);
+        console.log('   📊 Bio params: type=' + type + ', majorVer=' + majorVer + ', minorVer=' + minorVer + ', format=' + format);
+        console.log('   📝 Template: ' + (template ? (template.length + ' chars, starts with: ' + template.substring(0, 20) + '...') : 'undefined'));
         
         // Validate required fields
         if (!pin || !type || !template) {
-            console.log(`⚠️ Validation failed: pin=${pin}, type=${type}, template=${template ? 'present' : 'missing'}`);
+            console.log('⚠️ Validation failed: pin=' + pin + ', type=' + type + ', template=' + (template ? 'present' : 'missing'));
             return { success: false, error: 'Missing required fields: pin, type, or template' };
         }
 
         // Validate template data
         if (!template || template.length === 0) {
-            console.log(`⚠️ Skipping BIODATA template for PIN ${pin}, Type ${type} - empty template data`);
+            console.log('⚠️ Skipping BIODATA template for PIN ' + pin + ', Type ' + type + ' - empty template data');
             return { success: false, error: 'Empty template data' };
         }
 
@@ -338,31 +497,30 @@ class CommandManager {
         try {
             const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
             if (!base64Regex.test(template)) {
-                console.log(`⚠️ Skipping BIODATA template for PIN ${pin}, Type ${type} - invalid base64 format`);
+                console.log('⚠️ Skipping BIODATA template for PIN ' + pin + ', Type ' + type + ' - invalid base64 format');
                 return { success: false, error: 'Invalid base64 template format' };
             }
         } catch (error) {
-            console.log(`⚠️ Template validation error for PIN ${pin}, Type ${type}:`, error.message);
+            console.log('⚠️ Template validation error for PIN ' + pin + ', Type ' + type + ':', error.message);
             return { success: false, error: 'Template validation failed' };
         }
 
         // Build command according to exact protocol specification:
         // C:${CmdID}:DATA UPDATE BIODATA Pin=${XXX}${HT}No=${XXX}${HT}Index=${XXX}${HT}Valid=${XXX}${HT}Duress=${XXX}${HT}Type=${XXX}${HT}MajorVer=${XXX}${HT}MinorVer=${XXX}${HT}Format=${XXX}${HT}Tmp=${XXX}
-        const TAB = '\t';
-        const commandData = `DATA UPDATE BIODATA Pin=${pin}${TAB}No=${no}${TAB}Index=${index}${TAB}Valid=${valid}${TAB}Duress=${duress}${TAB}Type=${type}${TAB}MajorVer=${majorVer}${TAB}MinorVer=${minorVer}${TAB}Format=${format}${TAB}Tmp=${template}`;
+        const commandData = 'DATA UPDATE BIODATA Pin=' + pin + '\tNo=' + no + '\tIndex=' + index + '\tValid=' + valid + '\tDuress=' + duress + '\tType=' + type + '\tMajorVer=' + majorVer + '\tMinorVer=' + minorVer + '\tFormat=' + format + '\tTmp=' + template;
         
-        console.log(`🚀 Generated BIODATA command (first 200 chars): ${commandData.substring(0, 200)}...`);
-        console.log(`🔍 Tab character verification: ${commandData.includes('\t') ? 'TABS PRESENT' : 'NO TABS FOUND'}`);
+        console.log('🚀 Generated BIODATA command (first 200 chars): ' + commandData.substring(0, 200) + '...');
+        console.log('🔍 Tab character verification: ' + (commandData.includes('\t') ? 'TABS PRESENT' : 'NO TABS FOUND'));
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async deleteBioTemplate(deviceSerial, pin, type = null, no = null) {
-        let commandData = `DATA DELETE BIODATA Pin=${pin}`;
+        let commandData = 'DATA DELETE BIODATA Pin=' + pin;
         if (type !== null) {
-            commandData += `\tType=${type}`;
+            commandData += '\tType=' + type;
             if (no !== null) {
-                commandData += `\tNo=${no}`;
+                commandData += '\tNo=' + no;
             }
         }
         
@@ -370,11 +528,11 @@ class CommandManager {
     }
 
     async queryBioTemplate(deviceSerial, type, pin = null, no = null) {
-        let commandData = `DATA QUERY BIODATA Type=${type}`;
+        let commandData = 'DATA QUERY BIODATA Type=' + type;
         if (pin !== null) {
-            commandData += `\tPIN=${pin}`;
+            commandData += '\tPIN=' + pin;
             if (no !== null) {
-                commandData += `\tNo=${no}`;
+                commandData += '\tNo=' + no;
             }
         }
         
@@ -384,13 +542,13 @@ class CommandManager {
     // User photo commands
     async addUserPhoto(deviceSerial, photoInfo) {
         const { pin, size, content } = photoInfo;
-        const commandData = `DATA UPDATE USERPIC PIN=${pin}\tSize=${size}\tContent=${content}`;
+        const commandData = 'DATA UPDATE USERPIC PIN=' + pin + '\tSize=' + size + '\tContent=' + content;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async deleteUserPhoto(deviceSerial, pin) {
-        const commandData = `DATA DELETE USERPIC PIN=${pin}`;
+        const commandData = 'DATA DELETE USERPIC PIN=' + pin;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -398,28 +556,28 @@ class CommandManager {
     async addComparisonPhoto(deviceSerial, photoInfo) {
         const { pin, type, size, content, format = 0, url = '', postBackTmpFlag = 0 } = photoInfo;
         
-        let commandData = `DATA UPDATE BIOPHOTO PIN=${pin}\tType=${type}\tSize=${size}\tContent=${content}\tFormat=${format}`;
-        if (url) commandData += `\tUrl=${url}`;
-        if (postBackTmpFlag) commandData += `\tPostBackTmpFlag=${postBackTmpFlag}`;
+        let commandData = 'DATA UPDATE BIOPHOTO PIN=' + pin + '\tType=' + type + '\tSize=' + size + '\tContent=' + content + '\tFormat=' + format;
+        if (url) commandData += '\tUrl=' + url;
+        if (postBackTmpFlag) commandData += '\tPostBackTmpFlag=' + postBackTmpFlag;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async deleteComparisonPhoto(deviceSerial, pin) {
-        const commandData = `DATA DELETE BIOPHOTO PIN=${pin}`;
+        const commandData = 'DATA DELETE BIOPHOTO PIN=' + pin;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     // Work code commands
     async addWorkCode(deviceSerial, workCodeInfo) {
         const { pin, code, name } = workCodeInfo;
-        const commandData = `DATA UPDATE WORKCODE PIN=${pin}\tCODE=${code}\tNAME=${name}`;
+        const commandData = 'DATA UPDATE WORKCODE PIN=' + pin + '\tCODE=' + code + '\tNAME=' + name;
         
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     async deleteWorkCode(deviceSerial, code) {
-        const commandData = `DATA DELETE WORKCODE CODE=${code}`;
+        const commandData = 'DATA DELETE WORKCODE CODE=' + code;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -505,6 +663,7 @@ class CommandManager {
 
     // Finger vein template commands
     async addFingerVeinTemplate(deviceSerial, templateInfo) {
+        console.log("templateInfo**********************************************",templateInfo)
         const { pin, fid, index, size, valid = 1, template } = templateInfo;
         const commandData = `DATA UPDATE FVEIN Pin=${pin}\tFID=${fid}\tIndex=${index}\tSize=${size}\tValid=${valid}\tTmp=${template}`;
         
