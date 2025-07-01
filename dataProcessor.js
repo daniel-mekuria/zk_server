@@ -956,19 +956,33 @@ class DataProcessor {
                         viceCard: parsed.data.ViceCard
                     });
                 } else if (parsed.type === 'FP') {
-                    result = await commandManager.addFingerprintTemplate(targetDevice, {
-                        PIN: parsed.data.PIN,
-                        FID: parsed.data.FID,
-                        Size: parsed.data.Size,
-                        Valid: parsed.data.Valid,
-                        TMP: parsed.data.TMP
+                    // Convert legacy fingerprint data to unified BIODATA format
+                    console.log(`🔄 Converting legacy FP sync to BIODATA format for PIN ${parsed.data.PIN}`);
+                    result = await commandManager.addBiodataTemplate(targetDevice, {
+                        pin: parsed.data.PIN,
+                        no: parseInt(parsed.data.FID) || 0,
+                        index: 0,
+                        valid: parseInt(parsed.data.Valid) || 1,
+                        duress: 0,
+                        type: 1, // Fingerprint type
+                        majorVer: 0,
+                        minorVer: 0,
+                        format: 'ZK',
+                        template: parsed.data.TMP
                     });
                 } else if (parsed.type === 'FACE') {
-                    result = await commandManager.addFaceTemplate(targetDevice, {
+                    // Convert legacy face data to unified BIODATA format
+                    console.log(`🔄 Converting legacy FACE sync to BIODATA format for PIN ${parsed.data.PIN}`);
+                    result = await commandManager.addBiodataTemplate(targetDevice, {
                         pin: parsed.data.PIN,
-                        fid: parsed.data.FID,
-                        size: parsed.data.SIZE,
-                        valid: parsed.data.VALID,
+                        no: parseInt(parsed.data.FID) || 0,
+                        index: 0,
+                        valid: parseInt(parsed.data.VALID || parsed.data.Valid) || 1,
+                        duress: 0,
+                        type: 2, // Face type
+                        majorVer: 0,
+                        minorVer: 0,
+                        format: 'ZK',
                         template: parsed.data.TMP
                     });
                 } else if (parsed.type === 'BIODATA') {
@@ -999,12 +1013,18 @@ class DataProcessor {
                         result = { success: false, error: 'Empty template data' };
                     }
                 } else if (parsed.type === 'FVEIN') {
-                    result = await commandManager.addFingerVeinTemplate(targetDevice, {
+                    // Convert finger vein data to unified BIODATA format
+                    console.log(`🔄 Converting FVEIN sync to BIODATA format for PIN ${parsed.data.Pin}`);
+                    result = await commandManager.addBiodataTemplate(targetDevice, {
                         pin: parsed.data.Pin,
-                        fid: parsed.data.FID,
-                        index: parsed.data.Index,
-                        size: parsed.data.Size,
-                        valid: parsed.data.Valid,
+                        no: parseInt(parsed.data.FID) || 0,
+                        index: parseInt(parsed.data.Index) || 0,
+                        valid: parseInt(parsed.data.Valid) || 1,
+                        duress: 0,
+                        type: 7, // Finger vein type
+                        majorVer: 0,
+                        minorVer: 0,
+                        format: 'ZK',
                         template: parsed.data.Tmp
                     });
                 } else if (parsed.type === 'USERPIC') {

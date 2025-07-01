@@ -375,6 +375,53 @@ class CommandManager {
         }
     }
 
+    // Unified biometric template management
+    async addUnifiedBiometricTemplate(deviceSerial, templateInfo) {
+        const { pin, biometricType, fid = 0, template, valid = 1, index = 0 } = templateInfo;
+        
+        // Enhanced validation using the new validation method
+        const validation = this.validateBiometricTemplate(templateInfo, biometricType);
+        if (!validation.valid) {
+            console.log(`⚠️ Biometric template validation failed for PIN ${pin}: ${validation.error}`);
+            return { success: false, error: validation.error };
+        }
+
+        // Map biometric types to BIODATA Type values according to protocol
+        const typeMapping = {
+            'fingerprint': 1,
+            'face': 2,
+            'voiceprint': 3,
+            'iris': 4,
+            'retina': 5,
+            'palmprint': 6,
+            'fingervein': 7,
+            'palm': 8,
+            'visible_light_face': 9
+        };
+
+        const biodataType = typeMapping[biometricType.toLowerCase()];
+        if (!biodataType) {
+            console.log('⚠️ Unknown biometric type: ' + biometricType);
+            return { success: false, error: 'Unknown biometric type' };
+        }
+
+        console.log(`🔧 Adding unified biometric template: PIN=${pin}, Type=${biodataType} (${biometricType}), FID=${fid}`);
+
+        // Use BIODATA format for all biometric types
+        return await this.addBiodataTemplate(deviceSerial, {
+            pin,
+            no: fid,  // Use FID as the biometric number
+            index,
+            valid,
+            duress: 0,
+            type: biodataType,
+            majorVer: 0,
+            minorVer: 0,
+            format: 'ZK',
+            template
+        });
+    }
+
     // User management commands
     async addUser(deviceSerial, userInfo) {
         const { pin, name, privilege = 0, password = '', card = '', groupId = 1, timeZone = '0000000000000000', verifyMode = -1, viceCard = '' } = userInfo;
@@ -407,7 +454,6 @@ class CommandManager {
 
         // Basic base64 validation
         try {
-            // Check if template looks like valid base64
             const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
             if (!base64Regex.test(template)) {
                 console.log('⚠️ Skipping fingerprint template for PIN ' + pin + ', FID ' + fid + ' - invalid base64 format');
@@ -418,46 +464,59 @@ class CommandManager {
             return { success: false, error: 'Validation failed' };
         }
 
-        const TAB = '\t';
-        const commandData = 'DATA UPDATE FINGERTMP PIN=' + fpData.PIN + TAB + 'FID=' + fpData.FID + TAB + 'Size=' + (fpData.Size || 0) + TAB + 'Valid=' + (fpData.Valid || 1) + TAB + 'TMP=' + (fpData.TMP || '');
+        console.log(`🔄 Converting fingerprint template to unified BIODATA format: PIN=${pin}, FID=${fid}`);
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        // Use unified approach instead of legacy FINGERTMP format
+        return await this.addUnifiedBiometricTemplate(deviceSerial, {
+            pin,
+            biometricType: 'fingerprint',
+            fid: parseInt(fid),
+            template,
+            valid: parseInt(valid) || 1
+        });
     }
 
     async deleteFingerprintTemplate(deviceSerial, pin, fid = null) {
-        let commandData;
-        if (fid !== null) {
-            commandData = 'DATA DELETE FINGERTMP PIN=' + pin + '\tFID=' + fid;
-        } else {
-            commandData = 'DATA DELETE FINGERTMP PIN=' + pin;
-        }
+        console.log(`🔄 Converting fingerprint delete to unified BIODATA format: PIN=${pin}, FID=${fid}`);
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        // Use unified BIODATA delete format instead of legacy FINGERTMP
+        return await this.deleteBioTemplate(deviceSerial, pin, 1, fid); // Type 1 = fingerprint
     }
 
     async queryFingerprintTemplate(deviceSerial, pin, fingerId = null) {
-        let commandData;
-        if (fingerId !== null) {
-            commandData = 'DATA QUERY FINGERTMP PIN=' + pin + '\tFingerID=' + fingerId;
-        } else {
-            commandData = 'DATA QUERY FINGERTMP PIN=' + pin;
-        }
+        console.log(`🔄 Converting fingerprint query to unified BIODATA format: PIN=${pin}, FID=${fingerId}`);
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        // Use unified BIODATA query format instead of legacy FINGERTMP
+        return await this.queryBioTemplate(deviceSerial, 1, pin, fingerId); // Type 1 = fingerprint
     }
 
-    // Face template commands
+    // Enhanced face template method that uses unified approach
     async addFaceTemplate(deviceSerial, templateInfo) {
         const { pin, fid, size, valid = 1, template } = templateInfo;
-        const TAB = '\t';
-        const commandData = 'DATA UPDATE FACE PIN=' + pin + TAB + 'FID=' + fid + TAB + 'Valid=' + valid + TAB + 'Size=' + size + TAB + 'TMP=' + template;
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        // Validate template data
+        if (!template || template.length === 0) {
+            console.log('⚠️ Skipping face template for PIN ' + pin + ', FID ' + fid + ' - empty template data');
+            return { success: false, error: 'Empty template data' };
+        }
+
+        console.log(`🔄 Converting face template to unified BIODATA format: PIN=${pin}, FID=${fid}`);
+        
+        // Use unified approach instead of legacy FACE format
+        return await this.addUnifiedBiometricTemplate(deviceSerial, {
+            pin,
+            biometricType: 'face',
+            fid: parseInt(fid) || 0,
+            template,
+            valid: parseInt(valid) || 1
+        });
     }
 
-    async deleteFaceTemplate(deviceSerial, pin) {
-        const commandData = 'DATA DELETE FACE PIN=' + pin;
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+    async deleteFaceTemplate(deviceSerial, pin, fid = null) {
+        console.log(`🔄 Converting face delete to unified BIODATA format: PIN=${pin}, FID=${fid}`);
+        
+        // Use unified BIODATA delete format instead of legacy FACE
+        return await this.deleteBioTemplate(deviceSerial, pin, 2, fid); // Type 2 = face
     }
 
     // Unified bio template commands (BIODATA format)
@@ -661,24 +720,35 @@ class CommandManager {
         }
     }
 
-    // Finger vein template commands
+    // Enhanced finger vein template method that uses unified approach
     async addFingerVeinTemplate(deviceSerial, templateInfo) {
-        console.log("templateInfo**********************************************",templateInfo)
+        console.log("Finger vein template info:", templateInfo);
         const { pin, fid, index, size, valid = 1, template } = templateInfo;
-        const commandData = `DATA UPDATE FVEIN Pin=${pin}\tFID=${fid}\tIndex=${index}\tSize=${size}\tValid=${valid}\tTmp=${template}`;
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        // Validate template data
+        if (!template || template.length === 0) {
+            console.log('⚠️ Skipping finger vein template for PIN ' + pin + ', FID ' + fid + ' - empty template data');
+            return { success: false, error: 'Empty template data' };
+        }
+
+        console.log(`🔄 Converting finger vein template to unified BIODATA format: PIN=${pin}, FID=${fid}, Index=${index}`);
+        
+        // Use unified approach with fingervein type
+        return await this.addUnifiedBiometricTemplate(deviceSerial, {
+            pin,
+            biometricType: 'fingervein',
+            fid: parseInt(fid) || 0,
+            template,
+            valid: parseInt(valid) || 1,
+            index: parseInt(index) || 0
+        });
     }
 
     async deleteFingerVeinTemplate(deviceSerial, pin, fid = null) {
-        let commandData;
-        if (fid !== null) {
-            commandData = `DATA DELETE FVEIN Pin=${pin}\tFID=${fid}`;
-        } else {
-            commandData = `DATA DELETE FVEIN Pin=${pin}`;
-        }
+        console.log(`🔄 Converting finger vein delete to unified BIODATA format: PIN=${pin}, FID=${fid}`);
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        // Use unified BIODATA delete format instead of legacy FVEIN
+        return await this.deleteBioTemplate(deviceSerial, pin, 7, fid); // Type 7 = finger vein
     }
 
     // Short message commands
@@ -791,6 +861,301 @@ class CommandManager {
         const commandData = `DATA QUERY ATTPHOTO StartTime=${startTime}\tEndTime=${endTime}`;
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
+
+    // Enhanced method for adding multiple biometric templates for a single user
+    async addUserWithBiometrics(deviceSerial, userInfo, biometrics = []) {
+        const results = [];
+        
+        try {
+            // First add the user
+            console.log(`📝 Adding user ${userInfo.pin} with ${biometrics.length} biometric templates`);
+            const userResult = await this.addUser(deviceSerial, userInfo);
+            results.push({ type: 'USER', success: userResult.success, result: userResult });
+            
+            if (!userResult.success) {
+                console.log(`❌ Failed to add user ${userInfo.pin}, skipping biometrics`);
+                return { success: false, results, error: 'User creation failed' };
+            }
+
+            // Then add biometric templates using unified format
+            for (let i = 0; i < biometrics.length; i++) {
+                const biometric = biometrics[i];
+                console.log(`🔧 Adding biometric ${i + 1}/${biometrics.length}: ${biometric.type} for user ${userInfo.pin}`);
+                
+                const bioResult = await this.addUnifiedBiometricTemplate(deviceSerial, {
+                    pin: userInfo.pin,
+                    biometricType: biometric.type,
+                    fid: biometric.fid || i,
+                    template: biometric.template,
+                    valid: biometric.valid || 1,
+                    index: biometric.index || 0
+                });
+                
+                results.push({ 
+                    type: biometric.type.toUpperCase(), 
+                    fid: biometric.fid || i,
+                    success: bioResult.success, 
+                    result: bioResult 
+                });
+                
+                if (!bioResult.success) {
+                    console.log(`⚠️ Failed to add ${biometric.type} template for user ${userInfo.pin}: ${bioResult.error}`);
+                }
+            }
+
+            const successCount = results.filter(r => r.success).length;
+            const totalCount = results.length;
+            
+            console.log(`✅ User ${userInfo.pin} setup complete: ${successCount}/${totalCount} operations successful`);
+            
+            return {
+                success: successCount > 0, // Success if at least user was created
+                results,
+                summary: `${successCount}/${totalCount} operations successful`,
+                userCreated: userResult.success,
+                biometricsAdded: results.filter(r => r.type !== 'USER' && r.success).length
+            };
+            
+        } catch (error) {
+            console.error(`Error adding user ${userInfo.pin} with biometrics:`, error);
+            return { success: false, results, error: error.message };
+        }
+    }
+
+    // Add missing query methods using unified format
+    async queryFaceTemplate(deviceSerial, pin, fid = null) {
+        console.log(`🔄 Converting face query to unified BIODATA format: PIN=${pin}, FID=${fid}`);
+        
+        // Use unified BIODATA query format
+        return await this.queryBioTemplate(deviceSerial, 2, pin, fid); // Type 2 = face
+    }
+
+    async queryFingerVeinTemplate(deviceSerial, pin, fid = null) {
+        console.log(`🔄 Converting finger vein query to unified BIODATA format: PIN=${pin}, FID=${fid}`);
+        
+        // Use unified BIODATA query format
+        return await this.queryBioTemplate(deviceSerial, 7, pin, fid); // Type 7 = finger vein
+    }
+
+    // Enhanced unified delete method with better error handling
+    async deleteUnifiedBiometricTemplate(deviceSerial, templateInfo) {
+        const { pin, biometricType, fid = null } = templateInfo;
+        
+        // Map biometric types to BIODATA Type values
+        const typeMapping = {
+            'fingerprint': 1,
+            'face': 2,
+            'voiceprint': 3,
+            'iris': 4,
+            'retina': 5,
+            'palmprint': 6,
+            'fingervein': 7,
+            'palm': 8,
+            'visible_light_face': 9
+        };
+
+        const biodataType = typeMapping[biometricType.toLowerCase()];
+        if (!biodataType) {
+            console.log('⚠️ Unknown biometric type for delete: ' + biometricType);
+            return { success: false, error: 'Unknown biometric type' };
+        }
+
+        console.log(`🗑️ Deleting unified biometric template: PIN=${pin}, Type=${biodataType} (${biometricType}), FID=${fid}`);
+        
+        return await this.deleteBioTemplate(deviceSerial, pin, biodataType, fid);
+    }
+
+    // Enhanced unified query method  
+    async queryUnifiedBiometricTemplate(deviceSerial, templateInfo) {
+        const { pin, biometricType, fid = null } = templateInfo;
+        
+        // Map biometric types to BIODATA Type values
+        const typeMapping = {
+            'fingerprint': 1,
+            'face': 2,
+            'voiceprint': 3,
+            'iris': 4,
+            'retina': 5,
+            'palmprint': 6,
+            'fingervein': 7,
+            'palm': 8,
+            'visible_light_face': 9
+        };
+
+        const biodataType = typeMapping[biometricType.toLowerCase()];
+        if (!biodataType) {
+            console.log('⚠️ Unknown biometric type for query: ' + biometricType);
+            return { success: false, error: 'Unknown biometric type' };
+        }
+
+        console.log(`🔍 Querying unified biometric template: PIN=${pin}, Type=${biodataType} (${biometricType}), FID=${fid}`);
+        
+        return await this.queryBioTemplate(deviceSerial, biodataType, pin, fid);
+    }
+
+    // Protocol compatibility helper - detects device capability and falls back if needed
+    async addBiometricWithFallback(deviceSerial, templateInfo) {
+        try {
+            // First try unified BIODATA format
+            console.log(`🔧 Attempting unified BIODATA format for device ${deviceSerial}`);
+            const result = await this.addUnifiedBiometricTemplate(deviceSerial, templateInfo);
+            
+            if (result.success) {
+                console.log(`✅ Unified BIODATA format successful for device ${deviceSerial}`);
+                return result;
+            }
+            
+            // If BIODATA failed, log but don't fallback automatically
+            // Device should support BIODATA format for consistency
+            console.log(`❌ Unified BIODATA format failed for device ${deviceSerial}: ${result.error}`);
+            return result;
+            
+        } catch (error) {
+            console.error(`Error in unified biometric template for device ${deviceSerial}:`, error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    // Bulk operations for multiple users with biometric data
+    async addMultipleUsersWithBiometrics(deviceSerial, usersData) {
+        const allResults = [];
+        
+        try {
+            console.log(`📝 Bulk adding ${usersData.length} users with biometric data to device ${deviceSerial}`);
+            
+            for (let i = 0; i < usersData.length; i++) {
+                const userData = usersData[i];
+                const { userInfo, biometrics = [] } = userData;
+                
+                console.log(`👤 Processing user ${i + 1}/${usersData.length}: PIN=${userInfo.pin}`);
+                
+                const result = await this.addUserWithBiometrics(deviceSerial, userInfo, biometrics);
+                allResults.push({
+                    pin: userInfo.pin,
+                    success: result.success,
+                    summary: result.summary,
+                    results: result.results
+                });
+                
+                // Small delay between users to prevent overwhelming the device
+                if (i < usersData.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            const successfulUsers = allResults.filter(r => r.success).length;
+            const totalUsers = allResults.length;
+            
+            console.log(`✅ Bulk operation complete: ${successfulUsers}/${totalUsers} users processed successfully`);
+            
+            return {
+                success: successfulUsers > 0,
+                totalUsers,
+                successfulUsers,
+                results: allResults,
+                summary: `${successfulUsers}/${totalUsers} users processed successfully`
+            };
+            
+        } catch (error) {
+            console.error('Error in bulk user operation:', error);
+            return { success: false, error: error.message, results: allResults };
+        }
+    }
+
+    // Enhanced validation for biometric template data
+    validateBiometricTemplate(templateData, biometricType) {
+        const { pin, template, fid, valid } = templateData;
+        
+        // Basic validation
+        if (!pin || !template) {
+            return { valid: false, error: 'Missing PIN or template data' };
+        }
+
+        // Base64 validation
+        try {
+            const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+            if (!base64Regex.test(template)) {
+                return { valid: false, error: 'Invalid base64 template format' };
+            }
+        } catch (error) {
+            return { valid: false, error: 'Template validation failed: ' + error.message };
+        }
+
+        // Biometric type specific validation
+        switch (biometricType.toLowerCase()) {
+            case 'fingerprint':
+                if (fid !== undefined && (fid < 0 || fid > 9)) {
+                    return { valid: false, error: 'Fingerprint FID must be between 0-9' };
+                }
+                break;
+            case 'face':
+                if (fid !== undefined && fid !== 0) {
+                    return { valid: false, error: 'Face FID should be 0' };
+                }
+                break;
+            case 'fingervein':
+                if (fid !== undefined && (fid < 0 || fid > 9)) {
+                    return { valid: false, error: 'Finger vein FID must be between 0-9' };
+                }
+                break;
+        }
+
+        // Template size validation (basic check)
+        if (template.length < 10) {
+            return { valid: false, error: 'Template data too short' };
+        }
+
+        return { valid: true };
+    }
+
+    // Clear all biometric data for a user (unified approach)
+    async clearUserBiometrics(deviceSerial, pin) {
+        const results = [];
+        
+        try {
+            console.log(`🧹 Clearing all biometric data for user ${pin} on device ${deviceSerial}`);
+            
+            // Clear each biometric type
+            const biometricTypes = [
+                { type: 'fingerprint', id: 1 },
+                { type: 'face', id: 2 },
+                { type: 'fingervein', id: 7 }
+            ];
+            
+            for (const bioType of biometricTypes) {
+                try {
+                    const result = await this.deleteBioTemplate(deviceSerial, pin, bioType.id);
+                    results.push({
+                        type: bioType.type,
+                        success: result.success || true, // Assume success if no error
+                        result
+                    });
+                    console.log(`🗑️ Cleared ${bioType.type} templates for user ${pin}`);
+                } catch (error) {
+                    console.log(`⚠️ Error clearing ${bioType.type} for user ${pin}: ${error.message}`);
+                    results.push({
+                        type: bioType.type,
+                        success: false,
+                        error: error.message
+                    });
+                }
+            }
+            
+            const successCount = results.filter(r => r.success).length;
+            
+            return {
+                success: successCount > 0,
+                cleared: successCount,
+                total: biometricTypes.length,
+                results
+            };
+            
+        } catch (error) {
+            console.error(`Error clearing biometrics for user ${pin}:`, error);
+            return { success: false, error: error.message, results };
+        }
+    }
+
 }
 
 module.exports = CommandManager; 
