@@ -684,16 +684,17 @@ class CommandManager {
             const timezoneResult = await this.setOption(deviceSerial, 'TimeZone', serverTimezoneOffset);
             results.push({ type: 'TimeZone', success: timezoneResult.success, result: timezoneResult });
             
-            // 2. Send current date and time (some devices support DateTime option)
+            // 2. Send current date and time in UTC format (to match Date header)
+            // The Date header is the primary sync mechanism and is always in GMT/UTC
             const now = new Date();
-            const dateTimeString = now.getFullYear() + '-' + 
-                                 String(now.getMonth() + 1).padStart(2, '0') + '-' +
-                                 String(now.getDate()).padStart(2, '0') + ' ' +
-                                 String(now.getHours()).padStart(2, '0') + ':' +
-                                 String(now.getMinutes()).padStart(2, '0') + ':' +
-                                 String(now.getSeconds()).padStart(2, '0');
+            const utcDateTimeString = now.getUTCFullYear() + '-' + 
+                                     String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+                                     String(now.getUTCDate()).padStart(2, '0') + ' ' +
+                                     String(now.getUTCHours()).padStart(2, '0') + ':' +
+                                     String(now.getUTCMinutes()).padStart(2, '0') + ':' +
+                                     String(now.getUTCSeconds()).padStart(2, '0');
             
-            const datetimeResult = await this.setOption(deviceSerial, 'DateTime', dateTimeString);
+            const datetimeResult = await this.setOption(deviceSerial, 'DateTime', utcDateTimeString);
             results.push({ type: 'DateTime', success: datetimeResult.success, result: datetimeResult });
             
             // 3. Reload options to apply changes
@@ -702,15 +703,26 @@ class CommandManager {
             
             const successCount = results.filter(r => r.success).length;
             
+            // Show both UTC and local time for clarity
+            const localDateTimeString = now.getFullYear() + '-' + 
+                                       String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                                       String(now.getDate()).padStart(2, '0') + ' ' +
+                                       String(now.getHours()).padStart(2, '0') + ':' +
+                                       String(now.getMinutes()).padStart(2, '0') + ':' +
+                                       String(now.getSeconds()).padStart(2, '0');
+            
             console.log(`🕐 Time synchronization for device ${deviceSerial}: ${successCount}/${results.length} commands queued successfully`);
-            console.log(`   📅 Server DateTime: ${dateTimeString} (GMT${serverTimezoneOffset >= 0 ? '+' : ''}${serverTimezoneOffset})`);
+            console.log(`   📅 Server UTC DateTime: ${utcDateTimeString} (sent to device)`);
+            console.log(`   📅 Server Local DateTime: ${localDateTimeString} (GMT${serverTimezoneOffset >= 0 ? '+' : ''}${serverTimezoneOffset})`);
+            console.log(`   ℹ️  Device will use UTC time + TimeZone offset for display`);
             
             return {
                 success: successCount > 0,
                 syncCommands: successCount,
                 totalCommands: results.length,
                 timezone: serverTimezoneOffset,
-                datetime: dateTimeString,
+                datetime: utcDateTimeString,
+                localDatetime: localDateTimeString,
                 results
             };
             
