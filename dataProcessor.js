@@ -919,6 +919,7 @@ class DataProcessor {
             }
 
             console.log(`✅ Syncing ${dataType} from ${sourceDevice} to ${otherDevices.length} devices`);
+            console.log(`📋 Sync scope: USER info, BIODATA templates, WORKCODE, SMS (USERPIC/BIOPHOTO disabled)`);
 
             // For each device, create sync commands
             for (const device of otherDevices) {
@@ -1028,18 +1029,13 @@ class DataProcessor {
                         template: parsed.data.Tmp
                     });
                 } else if (parsed.type === 'USERPIC') {
-                    result = await commandManager.addUserPhoto(targetDevice, {
-                        pin: parsed.data.PIN,
-                        size: parsed.data.Size,
-                        content: parsed.data.Content
-                    });
+                    // Skip USERPIC sync - biometric data is sufficient
+                    console.log(`🚫 Skipping USERPIC sync for PIN ${parsed.data.PIN} - photos not needed for biometric system`);
+                    result = { success: false, error: 'USERPIC sync disabled - biometric data only' };
                 } else if (parsed.type === 'BIOPHOTO') {
-                    result = await commandManager.addComparisonPhoto(targetDevice, {
-                        pin: parsed.data.PIN,
-                        type: parsed.data.Type,
-                        size: parsed.data.Size,
-                        content: parsed.data.Content
-                    });
+                    // Skip BIOPHOTO sync - biometric data is sufficient  
+                    console.log(`🚫 Skipping BIOPHOTO sync for PIN ${parsed.data.PIN} - photos not needed for biometric system`);
+                    result = { success: false, error: 'BIOPHOTO sync disabled - biometric data only' };
                 } else if (parsed.type === 'WORKCODE') {
                     result = await commandManager.addWorkCode(targetDevice, {
                         pin: parsed.data.PIN,

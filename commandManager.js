@@ -167,16 +167,29 @@ class CommandManager {
             return tmpMatch ? tmpMatch[1] : null;
         };
         
+        // Extract all parameters with improved regex patterns to handle missing tabs
+        const extractParamImproved = (name, str) => {
+            // Try normal pattern first
+            let pattern = new RegExp(name + '=([^\\s\\t]+)', 'i');
+            let match = str.match(pattern);
+            if (match) return match[1];
+            
+            // Try pattern that handles concatenated parameters (like Index=13Valid=1)
+            pattern = new RegExp(name + '=([^A-Za-z_=]+)(?=[A-Za-z_]+=|$)', 'i');
+            match = str.match(pattern);
+            return match ? match[1] : null;
+        };
+        
         // Extract all parameters
-        params.Pin = extractParam('Pin', paramsString);
-        params.No = extractParam('No', paramsString);
-        params.Index = extractParam('Index', paramsString);
-        params.Valid = extractParam('Valid', paramsString);
-        params.Duress = extractParam('Duress', paramsString);
-        params.Type = extractParam('Type', paramsString);
-        params.MajorVer = extractParam('MajorVer', paramsString);
-        params.MinorVer = extractParam('MinorVer', paramsString);
-        params.Format = extractParam('Format', paramsString);
+        params.Pin = extractParamImproved('Pin', paramsString);
+        params.No = extractParamImproved('No', paramsString);
+        params.Index = extractParamImproved('Index', paramsString);
+        params.Valid = extractParamImproved('Valid', paramsString);
+        params.Duress = extractParamImproved('Duress', paramsString);
+        params.Type = extractParamImproved('Type', paramsString);
+        params.MajorVer = extractParamImproved('MajorVer', paramsString);
+        params.MinorVer = extractParamImproved('MinorVer', paramsString);
+        params.Format = extractParamImproved('Format', paramsString);
         params.Tmp = extractTmp(paramsString);
         
         // Log what we found
@@ -197,20 +210,28 @@ class CommandManager {
         const correctedCommand = commandPrefix + rebuiltParams;
         
         // Always rebuild to ensure proper tab formatting
-        const hasProperTabs = commandData.includes('\t') && (commandData.match(/\t/g) || []).length >= 8;
+        // BIODATA should have exactly 9 tabs between 10 parameters
+        const tabCount = (commandData.match(/\t/g) || []).length;
+        const expectedTabs = 9;
+        const hasProperTabs = commandData.includes('\t') && tabCount === expectedTabs;
+        
+        // Always return the corrected command to ensure consistent tab formatting
+        // This prevents issues where tabs might be missing between specific parameters
+        console.log('🔧 BIODATA command validation:');
+        console.log('   Original length: ' + commandData.length);
+        console.log('   Corrected length: ' + correctedCommand.length);
+        console.log('   Tab count in original: ' + tabCount);
+        console.log('   Tab count in corrected: ' + (correctedCommand.match(/\t/g) || []).length);
+        console.log('   Expected tabs: ' + expectedTabs);
+        console.log('   Has proper tabs: ' + (hasProperTabs ? 'YES' : 'NO'));
         
         if (!hasProperTabs || correctedCommand !== commandData) {
-            console.log('🔧 BIODATA command corrected:');
-            console.log('   Original length: ' + commandData.length);
-            console.log('   Corrected length: ' + correctedCommand.length);
-            console.log('   Tab count in original: ' + (commandData.match(/\t/g) || []).length);
-            console.log('   Tab count in corrected: ' + (correctedCommand.match(/\t/g) || []).length);
-            console.log('   Proper tabs: ' + (hasProperTabs ? 'YES' : 'NO'));
-            return correctedCommand;
+            console.log('   ✅ Returning corrected command with proper tab formatting');
         } else {
-            console.log('✅ BIODATA command format is correct');
-            return commandData;
+            console.log('   ✅ Command already has proper formatting, but returning rebuilt version for consistency');
         }
+        
+        return correctedCommand;
     }
 
     async processCommandReply(deviceSerial, replyData) {
@@ -353,6 +374,21 @@ class CommandManager {
             // Special handling for template-related errors
             if (errorCode === '-11' || errorCode === '-12') {
                 console.log('🔧 Template format issue detected. This may be due to algorithm version mismatch or corrupted template data.');
+                
+                // Check if this is actually a USERPIC command failing with wrong error code
+                if (reply.CMD === 'DATA' && reply.ID) {
+                    // Try to get the command from pending commands to see what type it was
+                    const pendingCmd = await this.db.get(
+                        'SELECT command_data FROM commands WHERE command_id = ?',
+                        [reply.ID]
+                    );
+                    
+                    if (pendingCmd && pendingCmd.command_data.includes('USERPIC')) {
+                        console.log('🚨 IMPORTANT: Device returned fingerprint error (-12) for a USERPIC command!');
+                        console.log('   This suggests the device may not support USERPIC or has a firmware issue.');
+                        console.log('   Command was: ' + pendingCmd.command_data.substring(0, 100) + '...');
+                    }
+                }
             }
         }
     }
@@ -601,9 +637,9 @@ class CommandManager {
     // User photo commands
     async addUserPhoto(deviceSerial, photoInfo) {
         const { pin, size, content } = photoInfo;
-        const commandData = 'DATA UPDATE USERPIC PIN=' + pin + '\tSize=' + size + '\tContent=' + content;
         
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        console.log(`🚫 USERPIC command disabled for PIN ${pin} - biometric data sync only`);
+        return { success: false, error: 'USERPIC commands disabled - using biometric data only' };
     }
 
     async deleteUserPhoto(deviceSerial, pin) {
@@ -613,13 +649,10 @@ class CommandManager {
 
     // Comparison photo commands
     async addComparisonPhoto(deviceSerial, photoInfo) {
-        const { pin, type, size, content, format = 0, url = '', postBackTmpFlag = 0 } = photoInfo;
+        const { pin } = photoInfo;
         
-        let commandData = 'DATA UPDATE BIOPHOTO PIN=' + pin + '\tType=' + type + '\tSize=' + size + '\tContent=' + content + '\tFormat=' + format;
-        if (url) commandData += '\tUrl=' + url;
-        if (postBackTmpFlag) commandData += '\tPostBackTmpFlag=' + postBackTmpFlag;
-        
-        return await this.addCommand(deviceSerial, 'DATA', commandData);
+        console.log(`🚫 BIOPHOTO command disabled for PIN ${pin} - biometric data sync only`);
+        return { success: false, error: 'BIOPHOTO commands disabled - using biometric data only' };
     }
 
     async deleteComparisonPhoto(deviceSerial, pin) {
@@ -1217,6 +1250,34 @@ class CommandManager {
         } catch (error) {
             console.error(`Error clearing biometrics for user ${pin}:`, error);
             return { success: false, error: error.message, results };
+        }
+    }
+
+    // Device capability check
+    async checkDevicePhotoSupport(deviceSerial) {
+        try {
+            const device = await this.db.get(
+                'SELECT options FROM devices WHERE serial_number = ?',
+                [deviceSerial]
+            );
+            
+            if (device && device.options) {
+                const options = JSON.parse(device.options);
+                const photoSupported = options.PhotoFunOn === '1';
+                const maxPhotos = parseInt(options['~MaxUserPhotoCount']) || 0;
+                
+                console.log(`📸 Device ${deviceSerial} photo support: ${photoSupported ? 'YES' : 'NO'}, Max photos: ${maxPhotos}`);
+                
+                return {
+                    supported: photoSupported,
+                    maxPhotos: maxPhotos
+                };
+            }
+            
+            return { supported: false, maxPhotos: 0 };
+        } catch (error) {
+            console.error('Error checking device photo support:', error);
+            return { supported: false, maxPhotos: 0 };
         }
     }
 
