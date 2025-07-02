@@ -920,6 +920,9 @@ class DataProcessor {
 
             console.log(`✅ Syncing ${dataType} from ${sourceDevice} to ${otherDevices.length} devices`);
             console.log(`📋 Sync scope: USER info, BIODATA templates, WORKCODE, SMS (USERPIC/BIOPHOTO disabled)`);
+            console.log(`📋 Sync scope: USER info, BIODATA templates, WORKCODE, SMS (USERPIC/BIOPHOTO disabled)`);
+            console.log(`📋 Sync scope: USER info, BIODATA templates, WORKCODE, SMS (USERPIC/BIOPHOTO disabled)`);
+            console.log(`📋 Sync scope: USER info, BIODATA templates, WORKCODE, SMS (USERPIC/BIOPHOTO disabled)`);
 
             // For each device, create sync commands
             for (const device of otherDevices) {
