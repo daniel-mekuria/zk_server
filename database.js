@@ -2,7 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 class Database {
-    constructor(dbPath = './zkpush.db') {
+    constructor(dbPath = './database/zkpush.db') {
         this.dbPath = dbPath;
         this.db = null;
     }

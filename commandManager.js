@@ -589,12 +589,26 @@ class CommandManager {
         }
 
         // Basic base64 validation for BIODATA templates
+        let finalTemplate = template; // Declare outside try block
+        
         try {
             const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
             if (!base64Regex.test(template)) {
                 console.log('⚠️ Skipping BIODATA template for PIN ' + pin + ', Type ' + type + ' - invalid base64 format');
                 return { success: false, error: 'Invalid base64 template format' };
             }
+            
+            // Fix base64 padding if needed
+            let correctedTemplate = template;
+            const paddingNeeded = (4 - (template.length % 4)) % 4;
+            if (paddingNeeded > 0) {
+                correctedTemplate = template + '='.repeat(paddingNeeded);
+                console.log('🔧 Fixed base64 padding for template: added', paddingNeeded, 'padding characters');
+                console.log('🔧 Original length:', template.length, 'Corrected length:', correctedTemplate.length);
+            }
+            
+            // Use the corrected template for the command
+            finalTemplate = correctedTemplate;
         } catch (error) {
             console.log('⚠️ Template validation error for PIN ' + pin + ', Type ' + type + ':', error.message);
             return { success: false, error: 'Template validation failed' };
@@ -602,7 +616,7 @@ class CommandManager {
 
         // Build command according to exact protocol specification:
         // C:${CmdID}:DATA UPDATE BIODATA Pin=${XXX}${HT}No=${XXX}${HT}Index=${XXX}${HT}Valid=${XXX}${HT}Duress=${XXX}${HT}Type=${XXX}${HT}MajorVer=${XXX}${HT}MinorVer=${XXX}${HT}Format=${XXX}${HT}Tmp=${XXX}
-        const commandData = 'DATA UPDATE BIODATA Pin=' + pin + '\tNo=' + no + '\tIndex=' + index + '\tValid=' + valid + '\tDuress=' + duress + '\tType=' + type + '\tMajorVer=' + majorVer + '\tMinorVer=' + minorVer + '\tFormat=' + format + '\tTmp=' + template;
+        const commandData = 'DATA UPDATE BIODATA Pin=' + pin + '\tNo=' + no + '\tIndex=' + index + '\tValid=' + valid + '\tDuress=' + duress + '\tType=' + type + '\tMajorVer=' + majorVer + '\tMinorVer=' + minorVer + '\tFormat=' + format + '\tTmp=' + finalTemplate;
         
         console.log('🚀 Generated BIODATA command (first 200 chars): ' + commandData.substring(0, 200) + '...');
         console.log('🔍 Tab character verification: ' + (commandData.includes('\t') ? 'TABS PRESENT' : 'NO TABS FOUND'));

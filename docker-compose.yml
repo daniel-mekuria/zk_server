@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  zk-server:
+    image: danielmek/hrms_adms
+    container_name: zk-push-server
+    ports:
+      - "8002:8002"
+    volumes:
+      # Mount the database directory as a volume for persistence
+      - zk_database:/app/database
+    environment:
+      - NODE_ENV=production
+      - PORT=8002
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8002/iclock/ping?SN=healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  # Named volume for database persistence
+  zk_database:
+    driver: local 

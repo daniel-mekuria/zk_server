@@ -119,6 +119,9 @@ class DataProcessor {
                 fields[key] = value;
             }
         }
+        if (fields.Tmp) {
+            console.log('[DEBUG][TEMPLATE][RECEIVED] Length:', fields.Tmp.length, 'First 100:', fields.Tmp.substring(0, 100));
+        }
         
         return fields;
     }
@@ -491,6 +494,32 @@ class DataProcessor {
             // Extract BIODATA portion and parse using spaces (protocol specification)
             const biodataContent = record.substring(8); // Remove 'BIODATA '
             const templateData = this.parseBiodataRecord(biodataContent);
+            if (templateData.Tmp) {
+                console.log('[DEBUG][TEMPLATE][PARSED] Length:', templateData.Tmp.length, 'First 100:', templateData.Tmp.substring(0, 100));
+                // Add detailed character analysis
+                console.log('[DEBUG][TEMPLATE][CHAR_ANALYSIS] Template character codes (first 50 chars):', 
+                    templateData.Tmp.substring(0, 50).split('').map(c => c.charCodeAt(0)).join(','));
+                console.log('[DEBUG][TEMPLATE][CHAR_ANALYSIS] Template contains control chars:', 
+                    /[\x00-\x1F\x7F]/.test(templateData.Tmp));
+                console.log('[DEBUG][TEMPLATE][CHAR_ANALYSIS] Template contains non-ASCII:', 
+                    /[^\x00-\x7F]/.test(templateData.Tmp));
+                
+                // Check for URL encoding issues
+                const decodedTemplate = decodeURIComponent(templateData.Tmp);
+                const hasUrlEncoding = decodedTemplate !== templateData.Tmp;
+                console.log('[DEBUG][TEMPLATE][URL_ENCODING] Template contains URL encoding:', hasUrlEncoding);
+                if (hasUrlEncoding) {
+                    console.log('[DEBUG][TEMPLATE][URL_ENCODING] Decoded template length:', decodedTemplate.length);
+                    console.log('[DEBUG][TEMPLATE][URL_ENCODING] Decoded template first 50:', decodedTemplate.substring(0, 50));
+                }
+                
+                // Check base64 padding and validity
+                const base64Length = templateData.Tmp.length;
+                const paddingLength = (4 - (base64Length % 4)) % 4;
+                console.log('[DEBUG][TEMPLATE][BASE64] Template length:', base64Length, 'Padding needed:', paddingLength);
+                console.log('[DEBUG][TEMPLATE][BASE64] Template ends with padding:', /={1,2}$/.test(templateData.Tmp));
+                console.log('[DEBUG][TEMPLATE][BASE64] Template contains invalid chars:', /[^A-Za-z0-9+/=]/.test(templateData.Tmp));
+            }
             
             console.log(`   📋 Parsed BIODATA fields:`, JSON.stringify(templateData, null, 2));
             
@@ -518,6 +547,30 @@ class DataProcessor {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [serialNumber, pin, no || 0, index || 0, valid || 1, duress || 0, type, majorVer || 0, minorVer || 0, format || 'ZK', template]
             );
+            if (template) {
+                console.log('[DEBUG][TEMPLATE][STORED] Length:', template.length, 'First 100:', template.substring(0, 100));
+                // Add detailed character analysis
+                console.log('[DEBUG][TEMPLATE][STORED_CHAR_ANALYSIS] Template character codes (first 50 chars):', 
+                    template.substring(0, 50).split('').map(c => c.charCodeAt(0)).join(','));
+                console.log('[DEBUG][TEMPLATE][STORED_CHAR_ANALYSIS] Template contains control chars:', 
+                    /[\x00-\x1F\x7F]/.test(template));
+                console.log('[DEBUG][TEMPLATE][STORED_CHAR_ANALYSIS] Template contains non-ASCII:', 
+                    /[^\x00-\x7F]/.test(template));
+                
+                // Verify the template was stored correctly by retrieving it
+                const storedTemplate = await this.db.get(
+                    `SELECT template_data FROM bio_templates WHERE device_serial = ? AND pin = ? AND type = ? AND bio_no = ?`,
+                    [serialNumber, pin, type, no || 0]
+                );
+                if (storedTemplate && storedTemplate.template_data) {
+                    const isIdentical = template === storedTemplate.template_data;
+                    console.log('[DEBUG][TEMPLATE][STORAGE_VERIFY] Template identical after storage:', isIdentical);
+                    if (!isIdentical) {
+                        console.log('[DEBUG][TEMPLATE][STORAGE_VERIFY] Original length:', template.length, 'Stored length:', storedTemplate.template_data.length);
+                        console.log('[DEBUG][TEMPLATE][STORAGE_VERIFY] First 50 chars identical:', template.substring(0, 50) === storedTemplate.template_data.substring(0, 50));
+                    }
+                }
+            }
 
             // Sync to other devices using correct BIODATA format
             await this.syncBiodataToOtherDevices(serialNumber, templateData);
@@ -563,6 +616,31 @@ class DataProcessor {
                     console.log(`   📋 Bio fields: Type=${biodataFields.Type}, MajorVer=${biodataFields.MajorVer}, MinorVer=${biodataFields.MinorVer}, Format=${biodataFields.Format}`);
                     console.log(`   📝 Template length: ${biodataFields.Tmp ? biodataFields.Tmp.length : 'undefined'}`);
                     
+                    // Verify the template data being used for sync matches what was stored
+                    const dbTemplate = await this.db.get(
+                        `SELECT template_data FROM bio_templates WHERE device_serial = ? AND pin = ? AND type = ? AND bio_no = ?`,
+                        [sourceDevice, biodataFields.Pin, biodataFields.Type, biodataFields.No || 0]
+                    );
+                    if (dbTemplate && dbTemplate.template_data) {
+                        const syncTemplateIdentical = biodataFields.Tmp === dbTemplate.template_data;
+                        console.log('[DEBUG][TEMPLATE][SYNC_DB_VERIFY] Template from DB identical to sync data:', syncTemplateIdentical);
+                        if (!syncTemplateIdentical) {
+                            console.log('[DEBUG][TEMPLATE][SYNC_DB_VERIFY] DB template length:', dbTemplate.template_data.length, 'Sync template length:', biodataFields.Tmp.length);
+                            console.log('[DEBUG][TEMPLATE][SYNC_DB_VERIFY] DB template first 50:', dbTemplate.template_data.substring(0, 50));
+                            console.log('[DEBUG][TEMPLATE][SYNC_DB_VERIFY] Sync template first 50:', biodataFields.Tmp.substring(0, 50));
+                        }
+                    }
+                    
+                    if (biodataFields.Tmp) {
+                        console.log('[DEBUG][TEMPLATE][SYNC_SEND] Length:', biodataFields.Tmp.length, 'First 100:', biodataFields.Tmp.substring(0, 100));
+                        // Add detailed character analysis
+                        console.log('[DEBUG][TEMPLATE][SYNC_CHAR_ANALYSIS] Template character codes (first 50 chars):', 
+                            biodataFields.Tmp.substring(0, 50).split('').map(c => c.charCodeAt(0)).join(','));
+                        console.log('[DEBUG][TEMPLATE][SYNC_CHAR_ANALYSIS] Template contains control chars:', 
+                            /[\x00-\x1F\x7F]/.test(biodataFields.Tmp));
+                        console.log('[DEBUG][TEMPLATE][SYNC_CHAR_ANALYSIS] Template contains non-ASCII:', 
+                            /[^\x00-\x7F]/.test(biodataFields.Tmp));
+                    }
                     const result = await commandManager.addBiodataTemplate(device.serial_number, {
                         pin: biodataFields.Pin,
                         no: biodataFields.No || 0,

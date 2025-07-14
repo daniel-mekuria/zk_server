@@ -4,21 +4,28 @@
   "description": "ZKTeco PUSH Protocol Server for syncing user and biometric data",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server.js > output.txt",
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "body-parser": "^1.20.2",
+    "dotenv": "^17.0.1",
+    "express": "^4.18.2",
+    "moment": "^2.29.4",
     "morgan": "^1.10.0",
     "sqlite3": "^5.1.6",
-    "uuid": "^9.0.0",
-    "moment": "^2.29.4"
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
-  "keywords": ["zkteco", "push", "protocol", "biometric", "attendance"],
+  "keywords": [
+    "zkteco",
+    "push",
+    "protocol",
+    "biometric",
+    "attendance"
+  ],
   "author": "",
   "license": "MIT"
-} 
+}

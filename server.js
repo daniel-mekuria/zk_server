@@ -8,7 +8,8 @@ const DeviceManager = require('./deviceManager');
 const CommandManager = require('./commandManager');
 const DataProcessor = require('./dataProcessor');
 const ManagementAPI = require('./managementAPI');
-
+const dotenv = require('dotenv');
+dotenv.config();
 class ZKPushServer {
     constructor(port = 8002) {
         this.port = port;
