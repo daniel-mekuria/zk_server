@@ -9,7 +9,7 @@ class CommandManager {
     async addCommand(deviceSerial, commandType, commandData) {
         try {
             const commandId = uuidv4().replace(/-/g, '').substring(0, 16);
-            
+
             await this.db.run(`
                 INSERT INTO commands 
                 (command_id, device_serial, command_type, command_data, status)
@@ -45,7 +45,7 @@ class CommandManager {
 
             // Format command according to ZK protocol
             const formattedCommand = this.formatCommand(command);
-            
+
             console.log('Sending command to ' + deviceSerial + ': ' + formattedCommand);
             return formattedCommand;
         } catch (error) {
@@ -57,7 +57,7 @@ class CommandManager {
     formatCommand(command) {
         // Validate and fix tab formatting before sending
         const correctedCommandData = this.validateAndFixTabs(command.command_data);
-        
+
         // Format: C:${CmdID}:${CmdDesc} ${CmdData}
         return 'C:' + command.command_id + ':' + correctedCommandData;
     }
@@ -71,7 +71,7 @@ class CommandManager {
         // Commands that should have tab-separated parameters
         const tabCommands = [
             'DATA UPDATE BIODATA',
-            'DATA UPDATE USERPIC', 
+            'DATA UPDATE USERPIC',
             'DATA UPDATE BIOPHOTO',
             'DATA UPDATE WORKCODE',
             'DATA UPDATE FVEIN',
@@ -91,7 +91,7 @@ class CommandManager {
 
         // Check if this command needs tab validation
         const needsTabValidation = tabCommands.some(cmd => commandData.startsWith(cmd));
-        
+
         if (!needsTabValidation) {
             return commandData;
         }
@@ -115,22 +115,22 @@ class CommandManager {
         // If we have parameters, ensure they're tab-separated
         if (remainingParts.length > 0) {
             const parametersString = remainingParts.join(' ');
-            
+
             // Check if parameters contain = signs (key=value pairs)
             if (parametersString.includes('=')) {
                 // Split by various possible separators and rejoin with tabs
                 let correctedParams = parametersString
                     .replace(/\s+([A-Za-z_]+)=/g, '\t$1=')  // Replace space before key= with tab
                     .replace(/^([A-Za-z_]+)=/, '$1=');      // Ensure first param doesn't start with tab
-                
+
                 const correctedCommand = commandPrefix + ' ' + correctedParams;
-                
+
                 if (correctedCommand !== commandData) {
                     console.log('✅ Tab formatting corrected:');
                     console.log('   Original: ' + commandData);
                     console.log('   Corrected: ' + correctedCommand);
                 }
-                
+
                 return correctedCommand;
             }
         }
@@ -141,45 +141,45 @@ class CommandManager {
 
     validateBiodataCommand(commandData) {
         console.log('🔧 Special BIODATA validation for: ' + commandData.substring(0, 100) + '...');
-        
+
         // Split the command into prefix and parameters
         const commandPrefix = 'DATA UPDATE BIODATA ';
         if (!commandData.startsWith(commandPrefix)) {
             return commandData;
         }
-        
+
         const paramsString = commandData.substring(commandPrefix.length);
         console.log('🔍 Raw parameters: ' + paramsString.substring(0, 200) + '...');
-        
+
         // Use a more direct approach - split by all whitespace first, then extract values
         const params = {};
-        
+
         // Extract each parameter individually using specific patterns
         const extractParam = (name, str) => {
             const pattern = new RegExp(name + '=([^\\s\\t]+)', 'i');
             const match = str.match(pattern);
             return match ? match[1] : null;
         };
-        
+
         // Special handling for Tmp parameter (it's the last one and can contain anything)
         const extractTmp = (str) => {
             const tmpMatch = str.match(/Tmp=(.*)$/i);
             return tmpMatch ? tmpMatch[1] : null;
         };
-        
+
         // Extract all parameters with improved regex patterns to handle missing tabs
         const extractParamImproved = (name, str) => {
             // Try normal pattern first
             let pattern = new RegExp(name + '=([^\\s\\t]+)', 'i');
             let match = str.match(pattern);
             if (match) return match[1];
-            
+
             // Try pattern that handles concatenated parameters (like Index=13Valid=1)
             pattern = new RegExp(name + '=([^A-Za-z_=]+)(?=[A-Za-z_]+=|$)', 'i');
             match = str.match(pattern);
             return match ? match[1] : null;
         };
-        
+
         // Extract all parameters
         params.Pin = extractParamImproved('Pin', paramsString);
         params.No = extractParamImproved('No', paramsString);
@@ -191,7 +191,7 @@ class CommandManager {
         params.MinorVer = extractParamImproved('MinorVer', paramsString);
         params.Format = extractParamImproved('Format', paramsString);
         params.Tmp = extractTmp(paramsString);
-        
+
         // Log what we found
         for (const [key, value] of Object.entries(params)) {
             if (value !== null) {
@@ -199,22 +199,22 @@ class CommandManager {
                 console.log('📝 Found ' + key + '=' + displayValue);
             }
         }
-        
+
         // Build the corrected command with proper tab separation
         const orderedParams = ['Pin', 'No', 'Index', 'Valid', 'Duress', 'Type', 'MajorVer', 'MinorVer', 'Format', 'Tmp'];
         const rebuiltParams = orderedParams
             .filter(param => params[param] !== null && params[param] !== undefined)
             .map(param => param + '=' + params[param])
             .join('\t');
-        
+
         const correctedCommand = commandPrefix + rebuiltParams;
-        
+
         // Always rebuild to ensure proper tab formatting
         // BIODATA should have exactly 9 tabs between 10 parameters
         const tabCount = (commandData.match(/\t/g) || []).length;
         const expectedTabs = 9;
         const hasProperTabs = commandData.includes('\t') && tabCount === expectedTabs;
-        
+
         // Always return the corrected command to ensure consistent tab formatting
         // This prevents issues where tabs might be missing between specific parameters
         console.log('🔧 BIODATA command validation:');
@@ -224,13 +224,13 @@ class CommandManager {
         console.log('   Tab count in corrected: ' + (correctedCommand.match(/\t/g) || []).length);
         console.log('   Expected tabs: ' + expectedTabs);
         console.log('   Has proper tabs: ' + (hasProperTabs ? 'YES' : 'NO'));
-        
+
         if (!hasProperTabs || correctedCommand !== commandData) {
             console.log('   ✅ Returning corrected command with proper tab formatting');
         } else {
             console.log('   ✅ Command already has proper formatting, but returning rebuilt version for consistency');
         }
-        
+
         return correctedCommand;
     }
 
@@ -238,7 +238,7 @@ class CommandManager {
         try {
             // Parse reply format: ID=${CmdID}&Return=${ReturnCode}&CMD=${CmdType}[&other_params]
             const reply = this.parseCommandReply(replyData);
-            
+
             if (reply.ID) {
                 await this.db.run(`
                     UPDATE commands 
@@ -247,7 +247,7 @@ class CommandManager {
                 `, ['completed', replyData, reply.ID, deviceSerial]);
 
                 console.log('Command reply processed: ' + reply.ID + ' -> Return: ' + reply.Return);
-                
+
                 // Handle specific command results
                 await this.handleCommandResult(deviceSerial, reply);
             }
@@ -262,14 +262,14 @@ class CommandManager {
     parseCommandReply(replyData) {
         const reply = {};
         const parts = replyData.split('&');
-        
+
         for (const part of parts) {
             const [key, value] = part.split('=');
             if (key && value !== undefined) {
                 reply[key] = value;
             }
         }
-        
+
         return reply;
     }
 
@@ -278,7 +278,7 @@ class CommandManager {
         // Normalize command type to handle any whitespace issues
         const cmdType = reply.CMD ? reply.CMD.trim().toUpperCase() : '';
         console.log('🔍 Processing command result: CMD="' + cmdType + '" (original: "' + reply.CMD + '"), Return: ' + reply.Return);
-        
+
         switch (cmdType) {
             case 'DATA':
                 await this.handleDataCommandResult(deviceSerial, reply);
@@ -319,7 +319,7 @@ class CommandManager {
         } else {
             const errorCode = reply.Return;
             let errorDescription = 'Unknown error';
-            
+
             // Map common error codes from the protocol specification
             switch (errorCode) {
                 case '-1':
@@ -368,13 +368,13 @@ class CommandManager {
                     errorDescription = 'Failed to get server data';
                     break;
             }
-            
+
             console.log('❌ Data command failed for device ' + deviceSerial + ', error code: ' + errorCode + ' (' + errorDescription + ')');
-            
+
             // Special handling for template-related errors
             if (errorCode === '-11' || errorCode === '-12') {
                 console.log('🔧 Template format issue detected. This may be due to algorithm version mismatch or corrupted template data.');
-                
+
                 // Check if this is actually a USERPIC command failing with wrong error code
                 if (reply.CMD === 'DATA' && reply.ID) {
                     // Try to get the command from pending commands to see what type it was
@@ -382,7 +382,7 @@ class CommandManager {
                         'SELECT command_data FROM commands WHERE command_id = ?',
                         [reply.ID]
                     );
-                    
+
                     if (pendingCmd && pendingCmd.command_data.includes('USERPIC')) {
                         console.log('🚨 IMPORTANT: Device returned fingerprint error (-12) for a USERPIC command!');
                         console.log('   This suggests the device may not support USERPIC or has a firmware issue.');
@@ -414,7 +414,7 @@ class CommandManager {
     // Unified biometric template management
     async addUnifiedBiometricTemplate(deviceSerial, templateInfo) {
         const { pin, biometricType, fid = 0, template, valid = 1, index = 0 } = templateInfo;
-        
+
         // Enhanced validation using the new validation method
         const validation = this.validateBiometricTemplate(templateInfo, biometricType);
         if (!validation.valid) {
@@ -461,10 +461,10 @@ class CommandManager {
     // User management commands
     async addUser(deviceSerial, userInfo) {
         const { pin, name, privilege = 0, password = '', card = '', groupId = 1, timeZone = '0000000000000000', verifyMode = -1, viceCard = '' } = userInfo;
-        
+
         const TAB = '\t';
         const commandData = 'DATA UPDATE USERINFO PIN=' + pin + TAB + 'Name=' + name + TAB + 'Pri=' + privilege + TAB + 'Passwd=' + password + TAB + 'Card=' + card + TAB + 'Grp=' + groupId + TAB + 'TZ=' + timeZone + TAB + 'Verify=' + verifyMode + TAB + 'ViceCard=' + viceCard;
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -481,7 +481,7 @@ class CommandManager {
     // Fingerprint template commands
     async addFingerprintTemplate(deviceSerial, fpData) {
         const { PIN: pin, FID: fid, Size: size, Valid: valid, TMP: template } = fpData;
-        
+
         // Validate template data to prevent -12 errors
         if (!template || template.length === 0) {
             console.log('⚠️ Skipping fingerprint template for PIN ' + pin + ', FID ' + fid + ' - empty template data');
@@ -501,7 +501,7 @@ class CommandManager {
         }
 
         console.log(`🔄 Converting fingerprint template to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified approach instead of legacy FINGERTMP format
         return await this.addUnifiedBiometricTemplate(deviceSerial, {
             pin,
@@ -514,14 +514,14 @@ class CommandManager {
 
     async deleteFingerprintTemplate(deviceSerial, pin, fid = null) {
         console.log(`🔄 Converting fingerprint delete to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified BIODATA delete format instead of legacy FINGERTMP
         return await this.deleteBioTemplate(deviceSerial, pin, 1, fid); // Type 1 = fingerprint
     }
 
     async queryFingerprintTemplate(deviceSerial, pin, fingerId = null) {
         console.log(`🔄 Converting fingerprint query to unified BIODATA format: PIN=${pin}, FID=${fingerId}`);
-        
+
         // Use unified BIODATA query format instead of legacy FINGERTMP
         return await this.queryBioTemplate(deviceSerial, 1, pin, fingerId); // Type 1 = fingerprint
     }
@@ -529,7 +529,7 @@ class CommandManager {
     // Enhanced face template method that uses unified approach
     async addFaceTemplate(deviceSerial, templateInfo) {
         const { pin, fid, size, valid = 1, template } = templateInfo;
-        
+
         // Validate template data
         if (!template || template.length === 0) {
             console.log('⚠️ Skipping face template for PIN ' + pin + ', FID ' + fid + ' - empty template data');
@@ -537,7 +537,7 @@ class CommandManager {
         }
 
         console.log(`🔄 Converting face template to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified approach instead of legacy FACE format
         return await this.addUnifiedBiometricTemplate(deviceSerial, {
             pin,
@@ -550,32 +550,32 @@ class CommandManager {
 
     async deleteFaceTemplate(deviceSerial, pin, fid = null) {
         console.log(`🔄 Converting face delete to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified BIODATA delete format instead of legacy FACE
         return await this.deleteBioTemplate(deviceSerial, pin, 2, fid); // Type 2 = face
     }
 
     // Unified bio template commands (BIODATA format)
     async addBiodataTemplate(deviceSerial, templateInfo) {
-        console.log('templateInfo**********************************************',templateInfo)
-        const { 
-            pin, 
-            no = 0, 
-            index = 0, 
-            valid = 1, 
-            duress = 0, 
-            type, 
-            majorVer = 0, 
-            minorVer = 0, 
-            format = 'ZK', 
-            template 
+        console.log('templateInfo**********************************************', templateInfo)
+        const {
+            pin,
+            no = 0,
+            index = 0,
+            valid = 1,
+            duress = 0,
+            type,
+            majorVer = 0,
+            minorVer = 0,
+            format = 'ZK',
+            template
         } = templateInfo;
-        
+
         console.log('🔧 BIODATA COMMAND DEBUG for device ' + deviceSerial + ':');
         console.log('   📋 Input params: pin=' + pin + ', no=' + no + ', index=' + index + ', valid=' + valid + ', duress=' + duress);
         console.log('   📊 Bio params: type=' + type + ', majorVer=' + majorVer + ', minorVer=' + minorVer + ', format=' + format);
         console.log('   📝 Template: ' + (template ? (template.length + ' chars, starts with: ' + template.substring(0, 20) + '...') : 'undefined'));
-        
+
         // Validate required fields
         if (!pin || !type || !template) {
             console.log('⚠️ Validation failed: pin=' + pin + ', type=' + type + ', template=' + (template ? 'present' : 'missing'));
@@ -590,14 +590,14 @@ class CommandManager {
 
         // Basic base64 validation for BIODATA templates
         let finalTemplate = template; // Declare outside try block
-        
+
         try {
             const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
             if (!base64Regex.test(template)) {
                 console.log('⚠️ Skipping BIODATA template for PIN ' + pin + ', Type ' + type + ' - invalid base64 format');
                 return { success: false, error: 'Invalid base64 template format' };
             }
-            
+
             // Fix base64 padding if needed
             let correctedTemplate = template;
             const paddingNeeded = (4 - (template.length % 4)) % 4;
@@ -606,7 +606,7 @@ class CommandManager {
                 console.log('🔧 Fixed base64 padding for template: added', paddingNeeded, 'padding characters');
                 console.log('🔧 Original length:', template.length, 'Corrected length:', correctedTemplate.length);
             }
-            
+
             // Use the corrected template for the command
             finalTemplate = correctedTemplate;
         } catch (error) {
@@ -617,10 +617,10 @@ class CommandManager {
         // Build command according to exact protocol specification:
         // C:${CmdID}:DATA UPDATE BIODATA Pin=${XXX}${HT}No=${XXX}${HT}Index=${XXX}${HT}Valid=${XXX}${HT}Duress=${XXX}${HT}Type=${XXX}${HT}MajorVer=${XXX}${HT}MinorVer=${XXX}${HT}Format=${XXX}${HT}Tmp=${XXX}
         const commandData = 'DATA UPDATE BIODATA Pin=' + pin + '\tNo=' + no + '\tIndex=' + index + '\tValid=' + valid + '\tDuress=' + duress + '\tType=' + type + '\tMajorVer=' + majorVer + '\tMinorVer=' + minorVer + '\tFormat=' + format + '\tTmp=' + finalTemplate;
-        
+
         console.log('🚀 Generated BIODATA command (first 200 chars): ' + commandData.substring(0, 200) + '...');
         console.log('🔍 Tab character verification: ' + (commandData.includes('\t') ? 'TABS PRESENT' : 'NO TABS FOUND'));
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -632,7 +632,7 @@ class CommandManager {
                 commandData += '\tNo=' + no;
             }
         }
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -644,14 +644,14 @@ class CommandManager {
                 commandData += '\tNo=' + no;
             }
         }
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     // User photo commands
     async addUserPhoto(deviceSerial, photoInfo) {
         const { pin, size, content } = photoInfo;
-        
+
         console.log(`🚫 USERPIC command disabled for PIN ${pin} - biometric data sync only`);
         return { success: false, error: 'USERPIC commands disabled - using biometric data only' };
     }
@@ -664,7 +664,7 @@ class CommandManager {
     // Comparison photo commands
     async addComparisonPhoto(deviceSerial, photoInfo) {
         const { pin } = photoInfo;
-        
+
         console.log(`🚫 BIOPHOTO command disabled for PIN ${pin} - biometric data sync only`);
         return { success: false, error: 'BIOPHOTO commands disabled - using biometric data only' };
     }
@@ -678,7 +678,7 @@ class CommandManager {
     async addWorkCode(deviceSerial, workCodeInfo) {
         const { pin, code, name } = workCodeInfo;
         const commandData = 'DATA UPDATE WORKCODE PIN=' + pin + '\tCODE=' + code + '\tNAME=' + name;
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -718,64 +718,76 @@ class CommandManager {
     // Time synchronization commands
     async syncDeviceTime(deviceSerial) {
         const results = [];
-        
+
         try {
             console.log(`🕐 Synchronizing time for device ${deviceSerial}`);
-            
-            // The ZKTeco protocol automatically syncs time via Date headers in HTTP responses
-            // and TimeZone setting in initialization. However, we can also send explicit commands
-            // to ensure proper synchronization.
-            
-            // 1. Send a time zone configuration
+
+            // IMPORTANT: ZKTeco devices sync time automatically through:
+            // 1. HTTP Date header (GMT time) - sent with every response
+            // 2. TimeZone parameter - sent during initialization (/iclock/cdata)
+            //
+            // To force immediate time sync, we need to trigger device re-initialization
+            // by sending a CHECK command, which forces the device to request new config.
+
+            // 1. Send CHECK command to force device to request new configuration
+            console.log(`📡 Sending CHECK command to force device re-initialization...`);
+            const checkResult = await this.checkDataUpdate(deviceSerial);
+            results.push({ type: 'CHECK', success: checkResult.success, result: checkResult });
+
+            // 2. Send timezone configuration
             const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60);
             const timezoneResult = await this.setOption(deviceSerial, 'TimeZone', serverTimezoneOffset);
             results.push({ type: 'TimeZone', success: timezoneResult.success, result: timezoneResult });
-            
-            // 2. Send current date and time in UTC format (to match Date header)
-            // The Date header is the primary sync mechanism and is always in GMT/UTC
-            const now = new Date();
-            const utcDateTimeString = now.getUTCFullYear() + '-' + 
-                                     String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
-                                     String(now.getUTCDate()).padStart(2, '0') + ' ' +
-                                     String(now.getUTCHours()).padStart(2, '0') + ':' +
-                                     String(now.getUTCMinutes()).padStart(2, '0') + ':' +
-                                     String(now.getUTCSeconds()).padStart(2, '0');
-            
-            const datetimeResult = await this.setOption(deviceSerial, 'DateTime', utcDateTimeString);
-            results.push({ type: 'DateTime', success: datetimeResult.success, result: datetimeResult });
-            
+
             // 3. Reload options to apply changes
             const reloadResult = await this.reloadOptions(deviceSerial);
             results.push({ type: 'ReloadOptions', success: reloadResult.success, result: reloadResult });
-            
+
             const successCount = results.filter(r => r.success).length;
-            
+
             // Show both UTC and local time for clarity
-            const localDateTimeString = now.getFullYear() + '-' + 
-                                       String(now.getMonth() + 1).padStart(2, '0') + '-' +
-                                       String(now.getDate()).padStart(2, '0') + ' ' +
-                                       String(now.getHours()).padStart(2, '0') + ':' +
-                                       String(now.getMinutes()).padStart(2, '0') + ':' +
-                                       String(now.getSeconds()).padStart(2, '0');
-            
-            console.log(`🕐 Time synchronization for device ${deviceSerial}: ${successCount}/${results.length} commands queued successfully`);
-            console.log(`   📅 Server UTC DateTime: ${utcDateTimeString} (sent to device)`);
-            console.log(`   📅 Server Local DateTime: ${localDateTimeString} (GMT${serverTimezoneOffset >= 0 ? '+' : ''}${serverTimezoneOffset})`);
-            console.log(`   ℹ️  Device will use UTC time + TimeZone offset for display`);
-            
+            const now = new Date();
+            const utcDateTimeString = now.getUTCFullYear() + '-' +
+                String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+                String(now.getUTCDate()).padStart(2, '0') + ' ' +
+                String(now.getUTCHours()).padStart(2, '0') + ':' +
+                String(now.getUTCMinutes()).padStart(2, '0') + ':' +
+                String(now.getUTCSeconds()).padStart(2, '0');
+
+            const localDateTimeString = now.getFullYear() + '-' +
+                String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                String(now.getDate()).padStart(2, '0') + ' ' +
+                String(now.getHours()).padStart(2, '0') + ':' +
+                String(now.getMinutes()).padStart(2, '0') + ':' +
+                String(now.getSeconds()).padStart(2, '0');
+
+            console.log(`✅ Time sync commands sent: ${successCount}/${results.length} successful`);
+            console.log(`   Server Local Time: ${localDateTimeString} (GMT${serverTimezoneOffset >= 0 ? '+' : ''}${serverTimezoneOffset})`);
+            console.log(`   UTC Time: ${utcDateTimeString}`);
+            console.log(`   Device will receive TimeZone=${serverTimezoneOffset} on next initialization`);
+            console.log(`   Expected device time: ${localDateTimeString}`);
+            console.log(``);
+            console.log(`⏰ NOTE: Device will sync time automatically from:`);
+            console.log(`   1. Processes the CHECK command (forces re-initialization)`);
+            console.log(`   2. Requests configuration from /iclock/cdata`);
+            console.log(`   3. Receives Date header (GMT) + TimeZone parameter`);
+            console.log(`   4. Device calculates: GMT + TimeZone offset = Local time`);
+            console.log(`   This usually happens within 1-2 minutes.`);
+
             return {
                 success: successCount > 0,
-                syncCommands: successCount,
-                totalCommands: results.length,
+                results,
                 timezone: serverTimezoneOffset,
-                datetime: utcDateTimeString,
-                localDatetime: localDateTimeString,
+                utcTime: utcDateTimeString,
+                localTime: localDateTimeString
+            };
+        } catch (error) {
+            console.error('Error syncing device time:', error);
+            return {
+                success: false,
+                error: error.message,
                 results
             };
-            
-        } catch (error) {
-            console.error(`❌ Error synchronizing time for device ${deviceSerial}:`, error);
-            return { success: false, error: error.message, results };
         }
     }
 
@@ -791,14 +803,14 @@ class CommandManager {
     async enrollFingerprint(deviceSerial, enrollInfo) {
         const { pin, fid, retry = 3, overwrite = 1 } = enrollInfo;
         const commandData = `ENROLL_FP PIN=${pin}\tFID=${fid}\tRETRY=${retry}\tOVERWRITE=${overwrite}`;
-        
+
         return await this.addCommand(deviceSerial, 'ENROLL', commandData);
     }
 
     async enrollBio(deviceSerial, enrollInfo) {
         const { type, pin, cardNo = '', retry = 3, overwrite = 1 } = enrollInfo;
         const commandData = `ENROLL_BIO TYPE=${type}\tPIN=${pin}\tCardNo=${cardNo}\tRETRY=${retry}\tOVERWRITE=${overwrite}`;
-        
+
         return await this.addCommand(deviceSerial, 'ENROLL', commandData);
     }
 
@@ -835,7 +847,7 @@ class CommandManager {
     async addFingerVeinTemplate(deviceSerial, templateInfo) {
         console.log("Finger vein template info:", templateInfo);
         const { pin, fid, index, size, valid = 1, template } = templateInfo;
-        
+
         // Validate template data
         if (!template || template.length === 0) {
             console.log('⚠️ Skipping finger vein template for PIN ' + pin + ', FID ' + fid + ' - empty template data');
@@ -843,7 +855,7 @@ class CommandManager {
         }
 
         console.log(`🔄 Converting finger vein template to unified BIODATA format: PIN=${pin}, FID=${fid}, Index=${index}`);
-        
+
         // Use unified approach with fingervein type
         return await this.addUnifiedBiometricTemplate(deviceSerial, {
             pin,
@@ -857,7 +869,7 @@ class CommandManager {
 
     async deleteFingerVeinTemplate(deviceSerial, pin, fid = null) {
         console.log(`🔄 Converting finger vein delete to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified BIODATA delete format instead of legacy FVEIN
         return await this.deleteBioTemplate(deviceSerial, pin, 7, fid); // Type 7 = finger vein
     }
@@ -866,7 +878,7 @@ class CommandManager {
     async addShortMessage(deviceSerial, messageInfo) {
         const { uid, msg, tag, minDuration = 0, startTime = '' } = messageInfo;
         const commandData = `DATA UPDATE SMS MSG=${msg}\tTAG=${tag}\tUID=${uid}\tMIN=${minDuration}\tStartTime=${startTime}`;
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -879,21 +891,21 @@ class CommandManager {
     async addUserSMSAssociation(deviceSerial, associationInfo) {
         const { pin, uid } = associationInfo;
         const commandData = `DATA UPDATE USER_SMS PIN=${pin}\tUID=${uid}`;
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
     // ID Card commands
     async addIdCard(deviceSerial, cardInfo) {
-        const { 
-            pin = '', snNum = '', idNum, dnNum = '', name = '', gender = 0, 
-            nation = 0, birthday = '', validInfo = '', address = '', 
-            additionalInfo = '', issuer = '', photo = '', fpTemplate1 = '', 
-            fpTemplate2 = '', reserve = '', notice = '' 
+        const {
+            pin = '', snNum = '', idNum, dnNum = '', name = '', gender = 0,
+            nation = 0, birthday = '', validInfo = '', address = '',
+            additionalInfo = '', issuer = '', photo = '', fpTemplate1 = '',
+            fpTemplate2 = '', reserve = '', notice = ''
         } = cardInfo;
-        
+
         const commandData = `DATA UPDATE IDCARD PIN=${pin}\tSNNum=${snNum}\tIDNum=${idNum}\tDNNum=${dnNum}\tName=${name}\tGender=${gender}\tNation=${nation}\tBirthday=${birthday}\tValidInfo=${validInfo}\tAddress=${address}\tAdditionalInfo=${additionalInfo}\tIssuer=${issuer}\tPhoto=${photo}\tFPTemplate1=${fpTemplate1}\tFPTemplate2=${fpTemplate2}\tReserve=${reserve}\tNotice=${notice}`;
-        
+
         return await this.addCommand(deviceSerial, 'DATA', commandData);
     }
 
@@ -919,13 +931,13 @@ class CommandManager {
 
     async sendFileToDevice(deviceSerial, url, filePath, action = null, tableName = null, recordCount = null) {
         let commandData = `PutFile ${url}\t${filePath}`;
-        
+
         if (action) {
             commandData += `\tAction=${action}`;
             if (tableName) commandData += `\tTableName=${tableName}`;
             if (recordCount) commandData += `\tRecordCount=${recordCount}`;
         }
-        
+
         return await this.addCommand(deviceSerial, 'FILE', commandData);
     }
 
@@ -937,14 +949,14 @@ class CommandManager {
 
     async upgradeDevice(deviceSerial, upgradeInfo) {
         const { type = null, checksum, size, url } = upgradeInfo;
-        
+
         let commandData;
         if (type) {
             commandData = `UPGRADE type=${type},checksum=${checksum},size=${size},url=${url}`;
         } else {
             commandData = `UPGRADE checksum=${checksum},url=${url},size=${size}`;
         }
-        
+
         return await this.addCommand(deviceSerial, 'UPGRADE', commandData);
     }
 
@@ -952,7 +964,7 @@ class CommandManager {
     async enrollCard(deviceSerial, enrollInfo) {
         const { pin, retry = 3 } = enrollInfo;
         const commandData = `ENROLL_MF PIN=${pin}\tRETRY=${retry}`;
-        
+
         return await this.addCommand(deviceSerial, 'ENROLL', commandData);
     }
 
@@ -976,13 +988,13 @@ class CommandManager {
     // Enhanced method for adding multiple biometric templates for a single user
     async addUserWithBiometrics(deviceSerial, userInfo, biometrics = []) {
         const results = [];
-        
+
         try {
             // First add the user
             console.log(`📝 Adding user ${userInfo.pin} with ${biometrics.length} biometric templates`);
             const userResult = await this.addUser(deviceSerial, userInfo);
             results.push({ type: 'USER', success: userResult.success, result: userResult });
-            
+
             if (!userResult.success) {
                 console.log(`❌ Failed to add user ${userInfo.pin}, skipping biometrics`);
                 return { success: false, results, error: 'User creation failed' };
@@ -992,7 +1004,7 @@ class CommandManager {
             for (let i = 0; i < biometrics.length; i++) {
                 const biometric = biometrics[i];
                 console.log(`🔧 Adding biometric ${i + 1}/${biometrics.length}: ${biometric.type} for user ${userInfo.pin}`);
-                
+
                 const bioResult = await this.addUnifiedBiometricTemplate(deviceSerial, {
                     pin: userInfo.pin,
                     biometricType: biometric.type,
@@ -1001,14 +1013,14 @@ class CommandManager {
                     valid: biometric.valid || 1,
                     index: biometric.index || 0
                 });
-                
-                results.push({ 
-                    type: biometric.type.toUpperCase(), 
+
+                results.push({
+                    type: biometric.type.toUpperCase(),
                     fid: biometric.fid || i,
-                    success: bioResult.success, 
-                    result: bioResult 
+                    success: bioResult.success,
+                    result: bioResult
                 });
-                
+
                 if (!bioResult.success) {
                     console.log(`⚠️ Failed to add ${biometric.type} template for user ${userInfo.pin}: ${bioResult.error}`);
                 }
@@ -1016,9 +1028,9 @@ class CommandManager {
 
             const successCount = results.filter(r => r.success).length;
             const totalCount = results.length;
-            
+
             console.log(`✅ User ${userInfo.pin} setup complete: ${successCount}/${totalCount} operations successful`);
-            
+
             return {
                 success: successCount > 0, // Success if at least user was created
                 results,
@@ -1026,7 +1038,7 @@ class CommandManager {
                 userCreated: userResult.success,
                 biometricsAdded: results.filter(r => r.type !== 'USER' && r.success).length
             };
-            
+
         } catch (error) {
             console.error(`Error adding user ${userInfo.pin} with biometrics:`, error);
             return { success: false, results, error: error.message };
@@ -1036,14 +1048,14 @@ class CommandManager {
     // Add missing query methods using unified format
     async queryFaceTemplate(deviceSerial, pin, fid = null) {
         console.log(`🔄 Converting face query to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified BIODATA query format
         return await this.queryBioTemplate(deviceSerial, 2, pin, fid); // Type 2 = face
     }
 
     async queryFingerVeinTemplate(deviceSerial, pin, fid = null) {
         console.log(`🔄 Converting finger vein query to unified BIODATA format: PIN=${pin}, FID=${fid}`);
-        
+
         // Use unified BIODATA query format
         return await this.queryBioTemplate(deviceSerial, 7, pin, fid); // Type 7 = finger vein
     }
@@ -1051,7 +1063,7 @@ class CommandManager {
     // Enhanced unified delete method with better error handling
     async deleteUnifiedBiometricTemplate(deviceSerial, templateInfo) {
         const { pin, biometricType, fid = null } = templateInfo;
-        
+
         // Map biometric types to BIODATA Type values
         const typeMapping = {
             'fingerprint': 1,
@@ -1072,14 +1084,14 @@ class CommandManager {
         }
 
         console.log(`🗑️ Deleting unified biometric template: PIN=${pin}, Type=${biodataType} (${biometricType}), FID=${fid}`);
-        
+
         return await this.deleteBioTemplate(deviceSerial, pin, biodataType, fid);
     }
 
     // Enhanced unified query method  
     async queryUnifiedBiometricTemplate(deviceSerial, templateInfo) {
         const { pin, biometricType, fid = null } = templateInfo;
-        
+
         // Map biometric types to BIODATA Type values
         const typeMapping = {
             'fingerprint': 1,
@@ -1100,7 +1112,7 @@ class CommandManager {
         }
 
         console.log(`🔍 Querying unified biometric template: PIN=${pin}, Type=${biodataType} (${biometricType}), FID=${fid}`);
-        
+
         return await this.queryBioTemplate(deviceSerial, biodataType, pin, fid);
     }
 
@@ -1110,17 +1122,17 @@ class CommandManager {
             // First try unified BIODATA format
             console.log(`🔧 Attempting unified BIODATA format for device ${deviceSerial}`);
             const result = await this.addUnifiedBiometricTemplate(deviceSerial, templateInfo);
-            
+
             if (result.success) {
                 console.log(`✅ Unified BIODATA format successful for device ${deviceSerial}`);
                 return result;
             }
-            
+
             // If BIODATA failed, log but don't fallback automatically
             // Device should support BIODATA format for consistency
             console.log(`❌ Unified BIODATA format failed for device ${deviceSerial}: ${result.error}`);
             return result;
-            
+
         } catch (error) {
             console.error(`Error in unified biometric template for device ${deviceSerial}:`, error);
             return { success: false, error: error.message };
@@ -1130,16 +1142,16 @@ class CommandManager {
     // Bulk operations for multiple users with biometric data
     async addMultipleUsersWithBiometrics(deviceSerial, usersData) {
         const allResults = [];
-        
+
         try {
             console.log(`📝 Bulk adding ${usersData.length} users with biometric data to device ${deviceSerial}`);
-            
+
             for (let i = 0; i < usersData.length; i++) {
                 const userData = usersData[i];
                 const { userInfo, biometrics = [] } = userData;
-                
+
                 console.log(`👤 Processing user ${i + 1}/${usersData.length}: PIN=${userInfo.pin}`);
-                
+
                 const result = await this.addUserWithBiometrics(deviceSerial, userInfo, biometrics);
                 allResults.push({
                     pin: userInfo.pin,
@@ -1147,7 +1159,7 @@ class CommandManager {
                     summary: result.summary,
                     results: result.results
                 });
-                
+
                 // Small delay between users to prevent overwhelming the device
                 if (i < usersData.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 100));
@@ -1156,9 +1168,9 @@ class CommandManager {
 
             const successfulUsers = allResults.filter(r => r.success).length;
             const totalUsers = allResults.length;
-            
+
             console.log(`✅ Bulk operation complete: ${successfulUsers}/${totalUsers} users processed successfully`);
-            
+
             return {
                 success: successfulUsers > 0,
                 totalUsers,
@@ -1166,7 +1178,7 @@ class CommandManager {
                 results: allResults,
                 summary: `${successfulUsers}/${totalUsers} users processed successfully`
             };
-            
+
         } catch (error) {
             console.error('Error in bulk user operation:', error);
             return { success: false, error: error.message, results: allResults };
@@ -1176,7 +1188,7 @@ class CommandManager {
     // Enhanced validation for biometric template data
     validateBiometricTemplate(templateData, biometricType) {
         const { pin, template, fid, valid } = templateData;
-        
+
         // Basic validation
         if (!pin || !template) {
             return { valid: false, error: 'Missing PIN or template data' };
@@ -1222,17 +1234,17 @@ class CommandManager {
     // Clear all biometric data for a user (unified approach)
     async clearUserBiometrics(deviceSerial, pin) {
         const results = [];
-        
+
         try {
             console.log(`🧹 Clearing all biometric data for user ${pin} on device ${deviceSerial}`);
-            
+
             // Clear each biometric type
             const biometricTypes = [
                 { type: 'fingerprint', id: 1 },
                 { type: 'face', id: 2 },
                 { type: 'fingervein', id: 7 }
             ];
-            
+
             for (const bioType of biometricTypes) {
                 try {
                     const result = await this.deleteBioTemplate(deviceSerial, pin, bioType.id);
@@ -1251,16 +1263,16 @@ class CommandManager {
                     });
                 }
             }
-            
+
             const successCount = results.filter(r => r.success).length;
-            
+
             return {
                 success: successCount > 0,
                 cleared: successCount,
                 total: biometricTypes.length,
                 results
             };
-            
+
         } catch (error) {
             console.error(`Error clearing biometrics for user ${pin}:`, error);
             return { success: false, error: error.message, results };
@@ -1274,20 +1286,20 @@ class CommandManager {
                 'SELECT options FROM devices WHERE serial_number = ?',
                 [deviceSerial]
             );
-            
+
             if (device && device.options) {
                 const options = JSON.parse(device.options);
                 const photoSupported = options.PhotoFunOn === '1';
                 const maxPhotos = parseInt(options['~MaxUserPhotoCount']) || 0;
-                
+
                 console.log(`📸 Device ${deviceSerial} photo support: ${photoSupported ? 'YES' : 'NO'}, Max photos: ${maxPhotos}`);
-                
+
                 return {
                     supported: photoSupported,
                     maxPhotos: maxPhotos
                 };
             }
-            
+
             return { supported: false, maxPhotos: 0 };
         } catch (error) {
             console.error('Error checking device photo support:', error);

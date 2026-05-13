@@ -5,7 +5,13 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js > output.txt",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "test": "jest --verbose"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/*.test.js"],
+    "collectCoverageFrom": ["*.js", "!server.js"]
   },
   "dependencies": {
     "body-parser": "^1.20.2",
@@ -17,6 +23,9 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "fast-check": "^4.7.0",
+    "jest": "^30.4.2",
     "nodemon": "^3.0.1"
   },
   "keywords": [

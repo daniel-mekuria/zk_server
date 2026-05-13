@@ -133,7 +133,7 @@ class ZKPushServer {
             `TransTimes=${config.transTimes || '00:00;12:00'}`,
             `TransInterval=${config.transInterval || 1}`,
             `TransFlag=TransData EnrollUser ChgUser EnrollFP ChgFP FACE UserPic BioPhoto WORKCODE FVEIN`,
-            `TimeZone=${config.timeZone || serverTimezoneOffset}`, // Use server's actual timezone for sync
+            `TimeZone=${config.timeZone || serverTimezoneOffset}`, // Use server's local timezone for consistent local time display
             `Realtime=${config.realtime || 1}`,
             `Encrypt=None`, // No encryption as requested
             `ServerVer=2.4.1`,
@@ -145,7 +145,7 @@ class ZKPushServer {
             `ATTPHOTOBase64=1` // Enable base64 encoding for photos
         ];
         
-        console.log(`🕐 Time synchronization configured: Server TimeZone=${config.timeZone || serverTimezoneOffset}, GMT Date header will be sent with all responses`);
+        console.log(`🕐 Time synchronization configured: Server TimeZone=${config.timeZone || 0}, GMT Date header will be sent with all responses`);
         
         return lines.join('\n');
     }
@@ -340,6 +340,9 @@ class ZKPushServer {
         try {
             await this.db.initialize();
             
+            // Run automatic migration for timezone fix
+            const migrationResult = await this.runTimezoneMigration();
+            
             this.app.listen(this.port, () => {
                 console.log(`ZK Push Server listening on port ${this.port}`);
                 console.log('Protocol features enabled:');
@@ -352,9 +355,147 @@ class ZKPushServer {
                 console.log('- Data encryption');
             });
             
+            // Always sync all devices on startup to ensure they have correct time
+            console.log('');
+            console.log('🔄 Running automatic time sync on startup...');
+            // Run sync after a short delay to ensure server is fully started
+            setTimeout(() => this.syncAllDevicesTime(), 2000);
+            
         } catch (error) {
             console.error('Failed to start server:', error);
             process.exit(1);
+        }
+    }
+
+    async runTimezoneMigration() {
+        try {
+            console.log('🔧 Running automatic timezone migration...');
+            
+            // Calculate server's timezone offset
+            const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60);
+            console.log(`   Server timezone: GMT${serverTimezoneOffset >= 0 ? '+' : ''}${serverTimezoneOffset}`);
+            
+            // Step 1: Check current timezone configurations
+            const currentConfigs = await this.db.all(`
+                SELECT device_serial, config_value 
+                FROM device_configs 
+                WHERE config_key = 'timeZone'
+            `);
+            
+            console.log(`   Found ${currentConfigs.length} device(s) with timezone configuration`);
+            
+            if (currentConfigs.length > 0) {
+                // Show current timezone values
+                const timezoneCounts = {};
+                currentConfigs.forEach(config => {
+                    const tz = config.config_value;
+                    timezoneCounts[tz] = (timezoneCounts[tz] || 0) + 1;
+                });
+                console.log(`   Current timezone values:`, timezoneCounts);
+            }
+            
+            // Step 2: Update all existing timezone configs to server's local timezone
+            const updateResult = await this.db.run(`
+                UPDATE device_configs 
+                SET config_value = ?, 
+                    updated_at = CURRENT_TIMESTAMP 
+                WHERE config_key = 'timeZone' 
+                  AND config_value != ?
+            `, [serverTimezoneOffset.toString(), serverTimezoneOffset.toString()]);
+            
+            // Step 3: Add timezone config for devices that don't have one
+            const devicesWithoutTimezone = await this.db.all(`
+                SELECT d.serial_number 
+                FROM devices d
+                LEFT JOIN device_configs dc ON d.serial_number = dc.device_serial AND dc.config_key = 'timeZone'
+                WHERE dc.id IS NULL
+            `);
+            
+            let addedCount = 0;
+            for (const device of devicesWithoutTimezone) {
+                await this.db.run(`
+                    INSERT INTO device_configs (device_serial, config_key, config_value)
+                    VALUES (?, 'timeZone', ?)
+                `, [device.serial_number, serverTimezoneOffset.toString()]);
+                addedCount++;
+            }
+            
+            // Summary
+            const totalChanges = updateResult.changes + addedCount;
+            if (totalChanges > 0) {
+                console.log(`✅ Timezone migration complete:`);
+                if (updateResult.changes > 0) {
+                    console.log(`   - Updated ${updateResult.changes} device(s) to timezone '${serverTimezoneOffset}'`);
+                }
+                if (addedCount > 0) {
+                    console.log(`   - Added timezone config for ${addedCount} device(s)`);
+                }
+                console.log(`   Devices will sync to server's local time on next initialization`);
+            } else {
+                console.log(`✅ Timezone migration check complete: All devices already configured correctly`);
+            }
+            
+            return { totalChanges, updated: updateResult.changes, added: addedCount };
+            
+        } catch (error) {
+            console.error('⚠️ Timezone migration failed:', error);
+            console.error('   Error details:', error.message);
+            // Don't stop server startup if migration fails
+            return { totalChanges: 0 };
+        }
+    }
+
+    async syncAllDevicesTime() {
+        try {
+            console.log('');
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('🕐 AUTO-SYNC: Forcing time synchronization for all devices');
+            console.log('═══════════════════════════════════════════════════════');
+            
+            // Get all devices
+            const devices = await this.db.all('SELECT serial_number, last_seen FROM devices ORDER BY last_seen DESC');
+            
+            if (!devices || devices.length === 0) {
+                console.log('⚠️  No devices found to sync');
+                return;
+            }
+            
+            console.log(`📊 Syncing ${devices.length} device(s)...`);
+            console.log('');
+            
+            let successCount = 0;
+            for (const device of devices) {
+                try {
+                    const lastSeen = device.last_seen ? new Date(device.last_seen) : null;
+                    const lastSeenStr = lastSeen ? lastSeen.toLocaleString() : 'Never';
+                    
+                    const result = await this.commandManager.syncDeviceTime(device.serial_number);
+                    if (result.success) {
+                        successCount++;
+                        console.log(`   ✅ ${device.serial_number}`);
+                        console.log(`      Last seen: ${lastSeenStr}`);
+                        console.log(`      Commands queued: CHECK, TimeZone, DateTime, ReloadOptions`);
+                    } else {
+                        console.log(`   ❌ ${device.serial_number}: Failed to queue commands`);
+                    }
+                } catch (error) {
+                    console.log(`   ❌ ${device.serial_number}: ${error.message}`);
+                }
+            }
+            
+            console.log('');
+            console.log(`✅ Auto-sync complete: ${successCount}/${devices.length} devices queued`);
+            console.log('');
+            console.log('⏰ IMPORTANT: Devices must connect to server to receive commands');
+            console.log('   - Commands are sent when devices poll /iclock/getrequest');
+            console.log('   - Devices typically poll every 1-10 minutes');
+            console.log('   - Check server logs for "Device initialization" or "Command request"');
+            console.log('   - Time will update after device receives and processes CHECK command');
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('');
+            
+        } catch (error) {
+            console.error('⚠️ Auto-sync failed:', error.message);
         }
     }
 }

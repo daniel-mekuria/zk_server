@@ -1,0 +1,114 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - Hardcoded Timezone and Incorrect Calculation
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: For deterministic bugs, scope the property to the concrete failing case(s) to ensure reproducibility
+  - Test that new device registration initializes with `timeZone: '0'` instead of hardcoded '9'
+  - Test that `buildInitializationResponse()` returns `TimeZone=0` when no custom timezone is configured
+  - Test that `syncDeviceTime()` calculates timezone as `Math.round(-new Date().getTimezoneOffset() / 60)` without the +1 offset
+  - Test that devices would display GMT time (10:35) instead of incorrect time (18:35 or 19:35)
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the bug exists)
+  - Document counterexamples found to understand root cause:
+    - New devices receive `timeZone: '9'` instead of '0'
+    - Initialization responses contain `TimeZone=9` instead of `TimeZone=0`
+    - Time sync calculation produces incorrect offset due to +1
+    - Devices would display time 8-9 hours ahead of GMT
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Non-Timezone Configuration and Custom Timezones
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for non-buggy inputs:
+    - Non-timezone configuration parameters (ErrorDelay, Delay, TransTimes, Realtime, etc.)
+    - Devices with custom (non-default) timezone configurations
+    - Date header generation using `new Date().toUTCString()`
+    - Device registration flow and database operations
+  - Write property-based tests capturing observed behavior patterns:
+    - For all non-timezone config parameters, verify initialization produces same values
+    - For all custom timezone values (not '9'), verify they are preserved
+    - For all HTTP responses, verify Date header uses GMT format
+    - For all device registrations, verify database operations work identically
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 3. Fix for time synchronization bug
+
+  - [x] 3.1 Implement the fix in deviceManager.js
+    - Open `deviceManager.js` and locate the `initializeDeviceConfig` function (line 56)
+    - Change `{ key: 'timeZone', value: '9' }` to `{ key: 'timeZone', value: '0' }` in the `defaultConfigs` array
+    - This ensures all newly registered devices default to GMT time display
+    - _Bug_Condition: isBugCondition(input) where input.timeZone = '9' AND input.isHardcodedDefault = true_
+    - _Expected_Behavior: newTimeZone = 0 for all new device registrations_
+    - _Preservation: Non-timezone configuration parameters remain unchanged_
+    - _Requirements: 1.1, 2.1_
+
+  - [x] 3.2 Implement the fix in commandManager.js
+    - Open `commandManager.js` and locate the `syncDeviceTime` function (line 730)
+    - Change `const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60) + 1;` to `const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60);`
+    - Remove the incorrect +1 offset from the timezone calculation
+    - Optional enhancement: Consider changing to `const serverTimezoneOffset = 0;` to always use GMT for consistent time display
+    - _Bug_Condition: isBugCondition(input) where input.timezoneCalculation_includes_plus_one = true_
+    - _Expected_Behavior: calculatedOffset excludes +1 and produces correct timezone offset_
+    - _Preservation: Time sync command structure and other calculations remain unchanged_
+    - _Requirements: 1.3, 2.3_
+
+  - [x] 3.3 Implement the fix in server.js
+    - Open `server.js` and locate the `buildInitializationResponse` function (line 127)
+    - Change `TimeZone=${config.timeZone || serverTimezoneOffset}` to `TimeZone=${config.timeZone || 0}`
+    - This ensures devices without a configured timezone default to GMT (0) instead of the server's local timezone
+    - This prevents the issue from recurring if the server is migrated again
+    - _Bug_Condition: isBugCondition(input) where input uses serverTimezoneOffset as fallback_
+    - _Expected_Behavior: Devices without custom timezone receive TimeZone=0_
+    - _Preservation: Devices with custom timezone configurations continue to use their custom values_
+    - _Requirements: 1.2, 2.2, 3.6_
+
+  - [x] 3.4 Create database migration script
+    - Create a SQL script to update existing device configurations
+    - Execute: `UPDATE device_configs SET config_value = '0', updated_at = CURRENT_TIMESTAMP WHERE config_key = 'timeZone' AND config_value = '9';`
+    - This fixes existing devices without requiring re-registration
+    - Devices will pick up the new value on their next initialization request
+    - _Bug_Condition: Existing devices with hardcoded '9' value in database_
+    - _Expected_Behavior: All devices with hardcoded '9' are updated to '0'_
+    - _Preservation: Devices with custom timezone values are not affected_
+    - _Requirements: 2.6_
+
+  - [x] 3.5 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - GMT Time Display
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - Verify:
+      - New devices receive `timeZone: '0'` in database
+      - Initialization responses contain `TimeZone=0`
+      - Time sync calculation produces correct offset without +1
+      - Devices display GMT time (10:35) instead of incorrect time (18:35 or 19:35)
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+
+  - [x] 3.6 Verify preservation tests still pass
+    - **Property 2: Preservation** - Non-Timezone Configuration and Custom Timezones
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all tests still pass after fix (no regressions):
+      - Non-timezone configuration parameters unchanged
+      - Custom timezone configurations preserved
+      - Date header generation unchanged
+      - Device registration flow unchanged
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 4. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+  - Verify the fix resolves the time synchronization issue
+  - Verify no regressions in device registration, configuration, or time synchronization
+  - Document the fix and update any relevant documentation

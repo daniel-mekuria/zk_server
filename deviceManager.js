@@ -29,7 +29,7 @@ class DeviceManager {
                         last_seen = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE serial_number = ?
                 `, [pushVersion, language, pushCommKey, lastSeen, serialNumber]);
-                
+
                 console.log(`Device updated: ${serialNumber}`);
             } else {
                 // Insert new device
@@ -38,9 +38,9 @@ class DeviceManager {
                     (serial_number, push_version, language, push_comm_key, last_seen)
                     VALUES (?, ?, ?, ?, ?)
                 `, [serialNumber, pushVersion, language, pushCommKey, lastSeen]);
-                
+
                 console.log(`New device registered: ${serialNumber}`);
-                
+
                 // Initialize default configuration
                 await this.initializeDeviceConfig(serialNumber);
             }
@@ -53,12 +53,15 @@ class DeviceManager {
     }
 
     async initializeDeviceConfig(serialNumber) {
+        // Calculate server timezone offset for local time display
+        const serverTimezoneOffset = Math.round(-new Date().getTimezoneOffset() / 60);
+        
         const defaultConfigs = [
             { key: 'errorDelay', value: '30' },
             { key: 'delay', value: '10' },
             { key: 'transTimes', value: '00:00;12:00' },
             { key: 'transInterval', value: '1' },
-            { key: 'timeZone', value: '8' },
+            { key: 'timeZone', value: serverTimezoneOffset.toString() },
             { key: 'realtime', value: '1' },
             { key: 'operlogStamp', value: 'None' },
             { key: 'biodataStamp', value: 'None' },
@@ -106,7 +109,7 @@ class DeviceManager {
             // Parse device info string
             // Format: "firmwareVersion,userCount,fingerprintCount,recordCount,ipAddress,fpAlgorithm,faceAlgorithm,faceEnrollCount,faceCount,functions"
             const infoParts = infoString.split(',');
-            
+
             if (infoParts.length >= 5) {
                 const [
                     firmwareVersion,
@@ -183,10 +186,10 @@ class DeviceManager {
     async getActiveDevices(minutesThreshold = 10) {
         try {
             const threshold = moment().subtract(minutesThreshold, 'minutes').format('YYYY-MM-DD HH:mm:ss');
-            
+
             return await this.db.all(
                 'SELECT * FROM devices '
-                
+
             );
         } catch (error) {
             console.error('Error getting active devices:', error);
@@ -213,7 +216,7 @@ class DeviceManager {
         try {
             // Parse options data: "key1=value1,key2=value2,..."
             const options = this.parseOptionsString(optionsData);
-            
+
             for (const [key, value] of Object.entries(options)) {
                 await this.updateDeviceConfig(serialNumber, key, value);
             }
@@ -228,19 +231,19 @@ class DeviceManager {
 
     parseOptionsString(optionsData) {
         const options = {};
-        
+
         if (!optionsData) return options;
-        
+
         // Split by comma and parse key=value pairs
         const pairs = optionsData.split(',');
-        
+
         for (const pair of pairs) {
             const [key, value] = pair.split('=').map(s => s.trim());
             if (key && value !== undefined) {
                 options[key] = value;
             }
         }
-        
+
         return options;
     }
 
@@ -250,7 +253,7 @@ class DeviceManager {
             if (!device) return null;
 
             const config = await this.getDeviceConfig(serialNumber);
-            
+
             return {
                 serialNumber: device.serial_number,
                 pushVersion: device.push_version,
@@ -289,7 +292,7 @@ class DeviceManager {
 
             await this.db.transaction(operations);
             console.log(`Device ${serialNumber} and all associated data removed`);
-            
+
             return { success: true };
         } catch (error) {
             console.error('Error removing device:', error);
@@ -300,7 +303,7 @@ class DeviceManager {
     async getDeviceStats(serialNumber) {
         try {
             const stats = {};
-            
+
             // Count users
             const userResult = await this.db.get(
                 'SELECT COUNT(*) as count FROM users WHERE device_serial = ?',
