@@ -44,6 +44,14 @@ class ZKPushServer {
     }
 
     setupRoutes() {
+        // Serve static files (attendance UI)
+        this.app.use(express.static('public'));
+        
+        // Root redirect to attendance page
+        this.app.get('/', (req, res) => {
+            res.redirect('/attendance.html');
+        });
+        
         // Initialization Information Exchange
         this.app.get('/iclock/cdata', this.handleInitialization.bind(this));
         
@@ -122,7 +130,7 @@ class ZKPushServer {
         
         const lines = [
             `GET OPTION FROM: ${serialNumber}`,
-            `ATTLOGStamp=None`, // We don't handle attendance
+            `ATTLOGStamp=${config.attlogStamp || '0'}`, // Accept attendance punch records from devices
             `OPERLOGStamp=${config.operlogStamp || 'None'}`,
             `ATTPHOTOStamp=None`, // We don't handle attendance photos
             `BIODATAStamp=${config.biodataStamp || 'None'}`,
@@ -180,6 +188,16 @@ class ZKPushServer {
             switch (table) {
                 case 'options':
                     result = await this.dataProcessor.processOptions(serialNumber, data);
+                    break;
+                case 'ATTLOG':
+                    console.log(`\n══════════════════════════════════════════════════════════`);
+                    console.log(`📋 ATTLOG PUNCH RECORD RECEIVED`);
+                    console.log(`   Device: ${serialNumber}`);
+                    console.log(`   Timestamp: ${new Date().toISOString()}`);
+                    console.log(`   Stamp: ${stamp}`);
+                    console.log(`   Raw Data:\n${data}`);
+                    console.log(`══════════════════════════════════════════════════════════\n`);
+                    result = await this.dataProcessor.processAttendanceLog(serialNumber, data, stamp);
                     break;
                 case 'OPERLOG':
                     result = await this.dataProcessor.processOperationLog(serialNumber, data, stamp);

@@ -1,0 +1,136 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - Attendance API Returns 404/Undefined
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the missing API endpoint
+  - **Scoped PBT Approach**: Scope the property to concrete failing cases: GET requests to `/api/attendance` with various query parameters
+  - Test that GET `/api/attendance` returns 404 Not Found (from Bug Condition in design)
+  - Test that GET `/api/attendance?device=SERIAL123` returns 404 Not Found
+  - Test that GET `/api/attendance?device=SERIAL123&startDate=2024-01-01&endDate=2024-01-31` returns 404 Not Found
+  - The test assertions should match the Expected Behavior: response should have structure `{ success: true, data: Array, count: Number }`
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS with 404 Not Found (this is correct - it proves the endpoint is missing)
+  - Document counterexamples found: "GET /api/attendance returns 404 instead of structured attendance data"
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Non-Attendance API Behavior Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for existing API endpoints
+  - Test GET `/api/devices` returns device list (observe actual response structure)
+  - Test GET `/api/users` returns user list (observe actual response structure)
+  - Test GET `/api/commands` returns command queue (observe actual response structure)
+  - Test POST `/api/users` creates users correctly (observe actual behavior)
+  - Test device initialization responses include `ATTLOGStamp=None` (observe actual response)
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4_
+
+- [x] 3. Implement attendance API endpoint
+
+  - [x] 3.1 Add database schema for attendance logs
+    - Create migration file for `attendance_logs` table
+    - Table schema: `device_serial`, `pin`, `timestamp`, `verify_type`, `work_code`, `in_out_state`, `created_at`
+    - Add indexes on `device_serial` and `timestamp` for query performance
+    - Run migration to create table
+    - _Bug_Condition: isBugCondition(input) where input.endpoint MATCHES '/api/attendance*'_
+    - _Expected_Behavior: API should store and retrieve attendance data from database_
+    - _Preservation: Database migrations must not affect existing tables or data_
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+
+  - [x] 3.2 Add attendance data processing in dataProcessor.js
+    - Add handler for incoming ATTLOG data responses from devices
+    - Parse attendance records from device response format
+    - Insert attendance records into `attendance_logs` table
+    - Handle duplicate records gracefully (upsert or ignore)
+    - Log attendance data processing for debugging
+    - _Bug_Condition: Devices respond with ATTLOG data but server has no handler_
+    - _Expected_Behavior: Server should parse and store attendance data from device responses_
+    - _Preservation: Existing data processors (BIODATA, OPERLOG, etc.) must continue working_
+    - _Requirements: 2.1, 2.2_
+
+  - [x] 3.3 Add command reply processing for attendance queries in server.js
+    - In `handleCommandReply` or `handleDataUpload`, add handling for attendance data responses
+    - Route attendance data to dataProcessor for parsing and storage
+    - Handle timeout scenarios where device doesn't respond
+    - Log command replies for debugging
+    - _Bug_Condition: Server sends DATA QUERY ATTLOG but doesn't handle responses_
+    - _Expected_Behavior: Server should receive and process attendance data from devices_
+    - _Preservation: Existing command reply handlers must continue working_
+    - _Requirements: 2.1, 2.2_
+
+  - [x] 3.4 Implement getAttendance handler in managementAPI.js
+    - Create async `getAttendance(req, res)` method
+    - Accept query parameters: `device` (optional), `startDate` (optional), `endDate` (optional)
+    - Validate device exists if specified (return 404 with error if not found)
+    - Default date range to current day if not specified
+    - Query `attendance_logs` table with filters (device, date range)
+    - Transform database records to API format: `{ timestamp, pin, verifyType, deviceSerial }`
+    - Return structured JSON: `{ success: true, data: [...], count: N }`
+    - Return `{ success: true, data: [], count: 0 }` when no records exist
+    - Handle errors gracefully with appropriate status codes
+    - _Bug_Condition: No handler exists for GET /api/attendance_
+    - _Expected_Behavior: Handler should return structured attendance data from database_
+    - _Preservation: Existing handlers (getDevices, getUsers, etc.) must remain unchanged_
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+
+  - [x] 3.5 Add attendance endpoint route in managementAPI.js
+    - In `setupRoutes()` method, add: `this.router.get('/attendance', this.getAttendance.bind(this))`
+    - Ensure route is registered before starting the server
+    - Test route is accessible at GET `/api/attendance`
+    - _Bug_Condition: No route defined for /api/attendance endpoint_
+    - _Expected_Behavior: Route should be registered and accessible_
+    - _Preservation: Existing routes must remain registered and functional_
+    - _Requirements: 2.1_
+
+  - [x] 3.6 Add live device querying capability (optional enhancement)
+    - If database has no recent attendance data, trigger live query to device
+    - Call `commandManager.queryAttendanceLog(deviceSerial, startTime, endTime)`
+    - Wait for device response (with timeout)
+    - Return data from database after device responds
+    - Handle scenarios where device is offline or unresponsive
+    - _Bug_Condition: API only returns stored data, not live queries_
+    - _Expected_Behavior: API can optionally query devices in real-time_
+    - _Preservation: Existing command infrastructure must continue working_
+    - _Requirements: 2.1, 2.4_
+
+  - [x] 3.7 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Attendance API Returns Structured Data
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1
+    - Verify GET `/api/attendance` returns 200 OK with structure `{ success: true, data: Array, count: Number }`
+    - Verify GET `/api/attendance?device=SERIAL123` returns proper response
+    - Verify GET `/api/attendance` with date range returns filtered results
+    - Verify empty results return `{ success: true, data: [], count: 0 }` instead of undefined
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+
+  - [x] 3.8 Verify preservation tests still pass
+    - **Property 2: Preservation** - Non-Attendance API Behavior Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - Verify GET `/api/devices` still works correctly
+    - Verify GET `/api/users` still works correctly
+    - Verify GET `/api/commands` still works correctly
+    - Verify device initialization still includes `ATTLOGStamp=None`
+    - Verify POST `/api/users` and other write operations still work
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all tests still pass after fix (no regressions)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4_
+
+- [x] 4. Checkpoint - Ensure all tests pass
+  - Run all tests: bug condition test (should now pass), preservation tests (should still pass)
+  - Verify API endpoint is accessible and returns proper structure
+  - Verify existing API endpoints are unaffected
+  - Test with real device if available (integration test)
+  - Document any issues or edge cases discovered
+  - Ask the user if questions arise

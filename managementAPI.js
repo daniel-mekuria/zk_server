@@ -32,6 +32,9 @@ class ManagementAPI {
         this.router.get('/status', this.getSystemStatus.bind(this));
         this.router.get('/stats', this.getSystemStats.bind(this));
         
+        // Attendance management
+        this.router.get('/attendance', this.getAttendance.bind(this));
+        
         // Manual sync
         this.router.post('/sync/manual', this.triggerManualSync.bind(this));
 
@@ -873,6 +876,99 @@ class ManagementAPI {
                 }
             });
         } catch (error) {
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    async getAttendance(req, res) {
+        try {
+            const { device, startDate, endDate } = req.query;
+            
+            console.log(`📊 Attendance API request: device=${device}, startDate=${startDate}, endDate=${endDate}`);
+            
+            // Validate device exists if specified
+            if (device) {
+                const deviceExists = await this.deviceManager.getDevice(device);
+                if (!deviceExists) {
+                    return res.status(404).json({
+                        success: false,
+                        error: `Device ${device} not found`
+                    });
+                }
+            }
+            
+            // Default date range to current day if not specified
+            const now = moment();
+            const start = startDate ? moment(startDate) : now.clone().startOf('day');
+            const end = endDate ? moment(endDate) : now.clone().endOf('day');
+            
+            // Build query with filters
+            let query = `
+                SELECT 
+                    id,
+                    pin,
+                    punch_time as timestamp,
+                    status,
+                    verify_type as verifyType,
+                    work_code as workCode,
+                    device_serial as deviceSerial,
+                    created_at as createdAt
+                FROM attendance_logs
+                WHERE 1=1
+            `;
+            const params = [];
+            
+            // Add device filter if specified
+            if (device) {
+                query += ' AND device_serial = ?';
+                params.push(device);
+            }
+            
+            // Add date range filter
+            query += ' AND punch_time >= ? AND punch_time <= ?';
+            params.push(start.format('YYYY-MM-DD HH:mm:ss'));
+            params.push(end.format('YYYY-MM-DD HH:mm:ss'));
+            
+            // Order by timestamp descending
+            query += ' ORDER BY punch_time DESC';
+            
+            console.log(`📊 Query: ${query}`);
+            console.log(`📊 Params: ${JSON.stringify(params)}`);
+            
+            // Execute query
+            const records = await this.db.all(query, params);
+            
+            // Transform records to API format
+            const data = records.map(record => ({
+                id: record.id,
+                pin: record.pin,
+                timestamp: record.timestamp,
+                status: parseInt(record.status),
+                verifyType: parseInt(record.verifyType),
+                workCode: record.workCode || '',
+                deviceSerial: record.deviceSerial,
+                createdAt: record.createdAt
+            }));
+            
+            console.log(`✅ Attendance API: Returning ${data.length} records`);
+            
+            // Return structured JSON response
+            res.json({
+                success: true,
+                data: data,
+                count: data.length,
+                query: {
+                    device: device || 'all',
+                    startDate: start.format('YYYY-MM-DD HH:mm:ss'),
+                    endDate: end.format('YYYY-MM-DD HH:mm:ss')
+                }
+            });
+            
+        } catch (error) {
+            console.error('❌ Attendance API error:', error);
             res.status(500).json({
                 success: false,
                 error: error.message

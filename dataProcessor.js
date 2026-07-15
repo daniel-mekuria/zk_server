@@ -18,6 +18,76 @@ class DataProcessor {
         }
     }
 
+    /**
+     * Process attendance punch records (ATTLOG) from ZK machines.
+     * 
+     * ATTLOG records are tab-separated with format:
+     *   PIN\tTime\tStatus\tVerify\tWorkCode\tReserved1\tReserved2
+     * 
+     * To check if attendance punch records are arriving from machines,
+     * look for these log markers in the server console output:
+     *   - "📋 ATTLOG PUNCH RECORD RECEIVED" (in server.js handleDataUpload)
+     *   - "🕐 PUNCH" per-record lines (below, in this method)
+     *   - "✅ ATTLOG processed" summary line
+     * 
+     * You can also grep the server logs:
+     *   grep "ATTLOG" <server-log-file>
+     *   grep "PUNCH" <server-log-file>
+     * 
+     * If you don't see any ATTLOG logs, it means no device is sending
+     * attendance data. Check:
+     *   1. ATTLOGStamp is NOT set to "None" in the initialization response
+     *   2. The device has Realtime=1 or TransFlag includes TransData
+     *   3. The device is connected (check heartbeat/ping logs)
+     */
+    async processAttendanceLog(serialNumber, data, stamp) {
+        try {
+            console.log(`[ATTLOG] Processing attendance log for device ${serialNumber}`);
+            
+            const records = this.parseDataRecords(data);
+            let processedCount = 0;
+
+            for (const record of records) {
+                try {
+                    // ATTLOG format: PIN\tTime\tStatus\tVerify\tWorkCode\tReserved1\tReserved2
+                    const fields = record.split('\t');
+                    const pin = fields[0] || '';
+                    const punchTime = fields[1] || '';
+                    const status = fields[2] || '0';      // 0=Check-In, 1=Check-Out, etc.
+                    const verifyType = fields[3] || '0';   // 0=Password, 1=Fingerprint, 2=Card, etc.
+                    const workCode = fields[4] || '';
+                    const reserved1 = fields[5] || '';
+                    const reserved2 = fields[6] || '';
+
+                    console.log(`   🕐 PUNCH | PIN: ${pin} | Time: ${punchTime} | Status: ${status} | Verify: ${verifyType} | WorkCode: ${workCode} | Device: ${serialNumber}`);
+
+                    // Store in database
+                    await this.db.run(
+                        `INSERT INTO attendance_logs (pin, punch_time, status, verify_type, work_code, reserved1, reserved2, device_serial)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [pin, punchTime, parseInt(status), parseInt(verifyType), workCode, reserved1, reserved2, serialNumber]
+                    );
+
+                    processedCount++;
+                } catch (recordError) {
+                    console.error(`   ❌ PUNCH ERROR | Failed to process record: "${record}" | Error: ${recordError.message}`);
+                }
+            }
+
+            // Update stamp if provided
+            if (stamp) {
+                await this.deviceManager.updateDeviceConfig(serialNumber, 'attlogStamp', stamp);
+            }
+
+            console.log(`   ✅ ATTLOG processed: ${processedCount}/${records.length} records saved for device ${serialNumber}`);
+
+            return { success: true, count: processedCount };
+        } catch (error) {
+            console.error(`[ATTLOG] ❌ Error processing attendance log for device ${serialNumber}:`, error);
+            return { success: false, message: error.message };
+        }
+    }
+
     async processOperationLog(serialNumber, data, stamp) {
         try {
             console.log(`Processing operation log for device ${serialNumber}`);

@@ -246,6 +246,21 @@ class Database {
                 UNIQUE(device_serial, config_key)
             )`,
 
+            // Attendance logs table (ATTLOG punch records from machines)
+            `CREATE TABLE IF NOT EXISTS attendance_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pin TEXT NOT NULL,
+                punch_time DATETIME NOT NULL,
+                status INTEGER DEFAULT 0,
+                verify_type INTEGER DEFAULT 0,
+                work_code TEXT,
+                reserved1 TEXT,
+                reserved2 TEXT,
+                device_serial TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (device_serial) REFERENCES devices (serial_number)
+            )`,
+
             // Sync log for tracking data synchronization
             `CREATE TABLE IF NOT EXISTS sync_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,7 +290,10 @@ class Database {
             'CREATE INDEX IF NOT EXISTS idx_commands_device ON commands(device_serial)',
             'CREATE INDEX IF NOT EXISTS idx_commands_status ON commands(status)',
             'CREATE INDEX IF NOT EXISTS idx_sync_log_source ON sync_log(source_device)',
-            'CREATE INDEX IF NOT EXISTS idx_sync_log_status ON sync_log(status)'
+            'CREATE INDEX IF NOT EXISTS idx_sync_log_status ON sync_log(status)',
+            'CREATE INDEX IF NOT EXISTS idx_attendance_pin ON attendance_logs(pin)',
+            'CREATE INDEX IF NOT EXISTS idx_attendance_device ON attendance_logs(device_serial)',
+            'CREATE INDEX IF NOT EXISTS idx_attendance_punch_time ON attendance_logs(punch_time)'
         ];
 
         for (const index of indexes) {
